@@ -415,6 +415,7 @@ namespace aegis
 		m_CommandContext.Scene = m_Scene.get();
 		m_CommandContext.Selection = &m_SelectedEntity;
 		m_CommandContext.Renderer = m_Renderer.get();
+		m_CommandContext.Assets = m_SceneRenderer != nullptr ? &m_SceneRenderer->GetAssetCache() : nullptr;
 		m_CommandContext.ProjectRoot = FileSystem::ToUtf8(FileSystem::GetCurrentWorkingDirectory());
 		m_CommandContext.ScreenshotRequest = [this](const std::string& path)
 		{

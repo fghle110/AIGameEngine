@@ -252,3 +252,35 @@ TEST_CASE("ModelImporter: rejects missing and malformed files")
 	CHECK_FALSE(empty.has_value());
 	CHECK(FileSystem::RemoveFile(emptyPath));
 }
+
+TEST_CASE("ModelImporter: tolerates a UTF-8 BOM in a glTF document")
+{
+	std::vector<u8> geometry;
+	AppendFloats(geometry, { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f });
+	AppendFloats(geometry, { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f });
+	AppendU16(geometry, { 0, 1, 2 });
+	AppendU16(geometry, { 0 });
+	REQUIRE(geometry.size() == 68);
+
+	// The fixture declares a base-color and a normal texture, so the image must be a
+	// real PNG data URI even though the BOM is what this test exercises.
+	const std::vector<u8> pngSource = { 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255 };
+	const FileSystem::Path pngPath = TestAssetPath("ae_model_bom.png");
+	REQUIRE(stbi_write_png(FileSystem::ToUtf8(pngPath).c_str(), 2, 2, 4, pngSource.data(), 2 * 4) != 0);
+	std::vector<u8> png;
+	REQUIRE(FileSystem::TryReadBinaryFile(pngPath, png));
+	CHECK(FileSystem::RemoveFile(pngPath));
+
+	const std::string document = MinimalGltf("data:image/png;base64," + EncodeBase64(png),
+		"data:application/octet-stream;base64," + EncodeBase64(geometry));
+	std::string withBom = "\xEF\xBB\xBF";
+	withBom += document;
+	const FileSystem::Path path = TestAssetPath("ae_model_bom.gltf");
+	REQUIRE(FileSystem::WriteTextFile(path, withBom));
+
+	const std::optional<ImportedModel> model = ModelImporter::Import(path);
+	REQUIRE(model.has_value());
+	CHECK(model->Geometry.IsValid());
+	CHECK(model->Geometry.GetSubmeshes().size() == 1);
+	CHECK(FileSystem::RemoveFile(path));
+}

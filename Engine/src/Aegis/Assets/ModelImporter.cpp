@@ -596,6 +596,13 @@ namespace aegis
 			return std::nullopt;
 		}
 
+		// glTF is JSON, and some exporters write a UTF-8 BOM even though the spec
+		// does not allow one; cgltf rejects the leading bytes, so drop them.
+		if (fileBytes.size() >= 3 && fileBytes[0] == 0xEF && fileBytes[1] == 0xBB && fileBytes[2] == 0xBF)
+		{
+			fileBytes.erase(fileBytes.begin(), fileBytes.begin() + 3);
+		}
+
 		cgltf_options options{};
 		options.memory.alloc_func = &ImportAlloc;
 		options.memory.free_func = &ImportFree;

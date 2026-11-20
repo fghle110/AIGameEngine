@@ -2,9 +2,11 @@
 
 #include <doctest/doctest.h>
 
+#include "Aegis/Commands/CommandBus.h"
 #include "Aegis/Core/CrashHandler.h"
 #include "Aegis/Core/FileSystem.h"
 #include "Aegis/Core/Log.h"
+#include "Editor/EditorCommands.h"
 #include "Aegis/Renderer/SceneRenderer.h"
 #include "Aegis/Renderer/Vulkan/VulkanDispatcher.h"
 #include "Aegis/Scene/Components.h"
@@ -16,6 +18,7 @@
 #include <volk.h>
 
 #include <cstring>
+#include <format>
 #include <vector>
 
 using namespace aegis;
@@ -724,4 +727,197 @@ TEST_CASE("SceneRenderer: bloom adds energy and can be toggled at runtime")
 	CHECK(reDisabled == doctest::Approx(withoutBloom).epsilon(0.001));
 
 	renderer.Shutdown();
+}
+
+namespace
+{
+	std::string EncodeBase64ForImport(const std::vector<u8>& bytes)
+	{
+		static const char c_Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		std::string encoded;
+		encoded.reserve(((bytes.size() + 2) / 3) * 4);
+		usize index = 0;
+		while (index + 2 < bytes.size())
+		{
+			const u32 triple = (static_cast<u32>(bytes[index]) << 16) | (static_cast<u32>(bytes[index + 1]) << 8) |
+				static_cast<u32>(bytes[index + 2]);
+			encoded.push_back(c_Alphabet[(triple >> 18) & 0x3F]);
+			encoded.push_back(c_Alphabet[(triple >> 12) & 0x3F]);
+			encoded.push_back(c_Alphabet[(triple >> 6) & 0x3F]);
+			encoded.push_back(c_Alphabet[triple & 0x3F]);
+			index += 3;
+		}
+		const usize remaining = bytes.size() - index;
+		if (remaining == 1)
+		{
+			const u32 triple = static_cast<u32>(bytes[index]) << 16;
+			encoded.push_back(c_Alphabet[(triple >> 18) & 0x3F]);
+			encoded.push_back(c_Alphabet[(triple >> 12) & 0x3F]);
+			encoded += "==";
+		}
+		else if (remaining == 2)
+		{
+			const u32 triple = (static_cast<u32>(bytes[index]) << 16) | (static_cast<u32>(bytes[index + 1]) << 8);
+			encoded.push_back(c_Alphabet[(triple >> 18) & 0x3F]);
+			encoded.push_back(c_Alphabet[(triple >> 12) & 0x3F]);
+			encoded.push_back(c_Alphabet[(triple >> 6) & 0x3F]);
+			encoded += '=';
+		}
+		return encoded;
+	}
+
+	void AppendFloatsForImport(std::vector<u8>& buffer, const std::vector<f32>& values)
+	{
+		for (const f32 value : values)
+		{
+			u8 bytes[sizeof(f32)];
+			std::memcpy(bytes, &value, sizeof(f32));
+			buffer.insert(buffer.end(), bytes, bytes + sizeof(f32));
+		}
+	}
+
+	void AppendU16ForImport(std::vector<u8>& buffer, const std::vector<u16>& values)
+	{
+		for (const u16 value : values)
+		{
+			u8 bytes[sizeof(u16)];
+			std::memcpy(bytes, &value, sizeof(u16));
+			buffer.insert(buffer.end(), bytes, bytes + sizeof(u16));
+		}
+	}
+
+	// One untextured triangle whose material is a flat red so a rendered pixel can
+		// prove that the imported material reached the GPU.
+	std::string MinimalImportGltf(const std::string& bufferUri)
+	{
+		return std::format(R"({{
+	"asset": {{ "version": "2.0", "generator": "Aegis tests" }},
+	"scene": 0,
+	"scenes": [{{ "nodes": [0] }}],
+	"nodes": [{{ "name": "Node", "mesh": 0 }}],
+	"meshes": [{{ "name": "Triangle", "primitives": [{{
+		"attributes": {{ "POSITION": 0 }}, "indices": 1, "material": 0 }}] }}],
+	"materials": [{{ "name": "Imported Red", "pbrMetallicRoughness": {{
+		"baseColorFactor": [0.9, 0.2, 0.1, 1.0],
+		"metallicFactor": 0.0,
+		"roughnessFactor": 0.9 }} }}],
+	"accessors": [
+		{{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0],
+		  "max": [1, 1, 0] }},
+		{{ "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" }}],
+	"bufferViews": [
+		{{ "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 }},
+		{{ "buffer": 0, "byteOffset": 36, "byteLength": 8, "target": 34963 }}],
+	"buffers": [{{ "byteLength": 44, "uri": "{}" }}]
+}})", bufferUri);
+	}
+}
+
+TEST_CASE("Scene commands: scene.importGltf creates a renderable entity")
+{
+	HeadlessDevice device;
+	if (!CreateHeadlessDevice(device))
+	{
+		AE_CORE_WARN("Vulkan 1.3 is unavailable on this machine: skipping the glTF import test");
+		return;
+	}
+
+	constexpr u32 c_Size = 64;
+	SceneRenderer renderer;
+	REQUIRE(renderer.Initialize(device.Nvrhi.Get()));
+		renderer.Resize(c_Size, c_Size);
+
+	// Build a self-contained glTF with an embedded buffer.
+	std::vector<u8> geometry;
+	AppendFloatsForImport(geometry, { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f });
+	AppendU16ForImport(geometry, { 0, 1, 2 });
+	AppendU16ForImport(geometry, { 0 });
+	REQUIRE(geometry.size() == 44);
+	const std::string document = MinimalImportGltf(
+		"data:application/octet-stream;base64," + EncodeBase64ForImport(geometry));
+	const FileSystem::Path gltfPath = FileSystem::Path("TestAssets") / FileSystem::Path("import_command.gltf");
+	REQUIRE(FileSystem::WriteTextFile(gltfPath, document));
+
+	Scene scene("import");
+	Entity sun = scene.CreateEntity("Sun");
+	LightComponent light;
+	light.Type = LightType::Directional;
+	light.Intensity = 4.0f;
+	sun.AddComponent<LightComponent>(light);
+	sun.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(-60.0f, 0.0f, 0.0f));
+	scene.UpdateTransforms();
+
+	Uuid selection = Uuid::Null();
+	EditorCommandContext context;
+	context.Scene = &scene;
+	context.Selection = &selection;
+	context.Assets = &renderer.GetAssetCache();
+	RegisterEditorCommands(context);
+
+	const auto importParams = [](const char* path, const char* name)
+	{
+		JsonValue params = JsonValue::MakeObject();
+		params.Set("path", std::string(path));
+		params.Set("name", std::string(name));
+		JsonValue position = JsonValue::MakeArray();
+		position.Push(0.0);
+		position.Push(0.0);
+		position.Push(0.0);
+		params.Set("position", std::move(position));
+		return params;
+	};
+
+	// A missing file fails with a readable error instead of creating an empty entity.
+	const CommandResult missing = CommandBus::Get().Execute("scene.importGltf",
+		importParams("TestAssets/import_command_missing.gltf", "Missing"));
+	CHECK_FALSE(missing.Success);
+	CHECK(scene.FindEntity("Missing").IsValid() == false);
+
+	const CommandResult imported = CommandBus::Get().Execute("scene.importGltf",
+		importParams(FileSystem::ToUtf8(gltfPath).c_str(), "Imported Triangle"));
+	REQUIRE(imported.Success);
+	CHECK(imported.Value.GetString("name") == "Imported Triangle");
+	CHECK(imported.Value.GetFloat("submeshes") == doctest::Approx(1.0f));
+	CHECK(imported.Value.GetFloat("materials") == doctest::Approx(1.0f));
+
+	Entity entity = scene.FindEntity("Imported Triangle");
+	REQUIRE(entity.IsValid());
+	REQUIRE(entity.HasComponent<MeshRendererComponent>());
+	const MeshRendererComponent& rendererComponent = entity.GetComponent<MeshRendererComponent>();
+	REQUIRE(rendererComponent.Mesh.IsValid());
+	const AssetCache::CachedMesh* mesh = renderer.GetAssetCache().GetMesh(rendererComponent.Mesh.Id);
+	REQUIRE(mesh != nullptr);
+	CHECK(mesh->Geometry.GetSubmeshes().size() == 1);
+	REQUIRE(mesh->MaterialIds.size() == 1);
+	CHECK(renderer.GetAssetCache().GetMaterial(mesh->MaterialIds[0]) != nullptr);
+
+	// The imported material must reach the GPU: render the triangle and check the colour.
+	const glm::vec3 cameraPosition(0.3f, 0.3f, 3.0f);
+	const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3(0.3f, 0.3f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+	const glm::mat4 projection = glm::perspective(glm::radians(50.0f), 1.0f, 0.1f, 100.0f);
+	const glm::mat4 lightViewProjection = SceneRenderer::ComputeDirectionalShadowMatrix(scene, cameraPosition, 20.0f);
+	nvrhi::CommandListHandle commandList = device.Nvrhi->createCommandList();
+	commandList->open();
+	renderer.Render(commandList, scene, projection * view, cameraPosition, lightViewProjection, false);
+	commandList->close();
+	nvrhi::ICommandList* rawList = commandList;
+	device.Nvrhi->executeCommandLists(&rawList, 1);
+	device.Nvrhi->waitForIdle();
+
+	CHECK(renderer.GetStats().DrawCalls == 1);
+	u32 width = 0;
+	u32 height = 0;
+	const std::vector<u8> pixels = ReadBackTexture(device.Nvrhi.Get(), renderer.GetFinalColor(), width, height);
+	REQUIRE(width == c_Size);
+	REQUIRE(height == c_Size);
+	const usize centre = (static_cast<usize>(c_Size / 2) * c_Size + c_Size / 2) * 4;
+	const glm::ivec4 centrePixel(pixels[centre + 0], pixels[centre + 1], pixels[centre + 2], pixels[centre + 3]);
+	CHECK(centrePixel.r > 20);
+	CHECK(centrePixel.r > centrePixel.b);
+
+	// Leave the registry with inert handlers so no later test sees dangling state.
+	context.Scene = nullptr;
+	context.Assets = nullptr;
+	RegisterEditorCommands(context);
+	CHECK(FileSystem::RemoveFile(gltfPath));
 }

@@ -10,6 +10,7 @@ namespace aegis
 {
 class Scene;
 class Renderer;
+class AssetCache;
 
 // Everything the editor command handlers need from the running editor. The
 // context is passed once to RegisterEditorCommands(); handlers copy it, so all
@@ -20,6 +21,9 @@ struct EditorCommandContext
 	aegis::Scene* Scene = nullptr;
 	Uuid* Selection = nullptr;
 	aegis::Renderer* Renderer = nullptr;
+	// GPU asset cache used by import commands; null when no renderer is attached
+	// (headless command tests), in which case imports fail with a clear error.
+	aegis::AssetCache* Assets = nullptr;
 
 	// Project directory used to resolve relative scene/screenshot paths.
 	std::string ProjectRoot;

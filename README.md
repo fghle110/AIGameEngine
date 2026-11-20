@@ -9,13 +9,14 @@ Aegis is a production-oriented 3D game engine for Windows, macOS and Linux (Ubun
 - Sparse-set ECS, scene graph with UUID-based hierarchy, plain-data components
 - Editor with dockable panels, hierarchy/inspector/console/assets/stats, live scene viewport,
   grid/selection overlays and a draggable translate gizmo (world axes + camera-plane handle)
-- AI-controllable editor: every action is a command on a JSON API (HTTP + `AegisCli`)
+- AI-controllable editor: every action is a command on a JSON API (HTTP + `AegisCli`),
+  including runtime glTF/GLB import (`scene.importGltf`) and render settings (`environment.set`)
 - Versioned JSON scene/prefab serialisation, project manifests, export pipeline (`AegisCli export`)
 - NVRHI Vulkan renderer: forward Cook-Torrance PBR, normal mapping, 2048² PCF shadow map,
   procedural sky or HDRI image-based lighting (irradiance/specular/BRDF prefiltered),
   depth-prepass SSAO, bloom, HDR → ACES tonemapping; glTF/GLB import with materials and textures
 - Physics (Jolt), 3D audio (miniaudio), Lua scripting with per-entity instances and hot reload
-- 176 doctest cases / 6828 assertions plus a feature project that exercises every component
+- 178 doctest cases / 6859 assertions plus a feature project that exercises every component
 - See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for the honest list of what is still missing
 
 ## Build

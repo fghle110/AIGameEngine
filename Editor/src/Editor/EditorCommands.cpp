@@ -5,7 +5,9 @@
 #include "Aegis/Core/FileSystem.h"
 #include "Aegis/Core/Json.h"
 #include "Aegis/Core/Log.h"
+#include "Aegis/Assets/ModelImporter.h"
 #include "Aegis/Core/StringUtils.h"
+#include "Aegis/Renderer/AssetCache.h"
 #include "Aegis/Renderer/Renderer.h"
 #include "Aegis/Scene/Components.h"
 #include "Aegis/Scene/Entity.h"
@@ -1859,6 +1861,131 @@ void RegisterEditorCommands(EditorCommandContext& context)
 		                }
 		                return CommandResult::Ok(SceneSerializer::Serialize(*scene));
 	                });
+
+
+	registerCommand(
+	    info("scene.importGltf", "scene",
+	         "Imports a glTF/GLB model (geometry, materials and textures) and creates an entity for it.",
+	         { parameter("path", "string", true, "glTF or GLB file (relative paths resolve against projectRoot)"),
+	           parameter("name", "string", false, "Entity name (defaults to the file stem)"),
+	           parameter("position", "number[3]", false, "World position of the new entity"),
+	           parameter("parent", "string", false, "Parent entity UUID"),
+	           parameter("castShadows", "bool", false, "Whether the model casts shadows (default true)") }),
+	    [context](const JsonValue& params) -> CommandResult
+	    {
+		    Scene* scene = nullptr;
+		    CommandResult sceneResult = requireScene(context, scene);
+		    if (!sceneResult.Success)
+		    {
+			    return sceneResult;
+		    }
+		    if (context.Assets == nullptr)
+		    {
+			    return CommandResult::Fail("scene.importGltf needs a renderer: no asset cache is attached to this editor");
+		    }
+
+		    std::string path;
+		    CommandResult readResult = readString(params, "path", true, path);
+		    if (!readResult.Success)
+		    {
+			    return readResult;
+		    }
+		    if (path.empty())
+		    {
+			    return CommandResult::Fail("'path' must not be empty");
+		    }
+
+		    std::string name;
+		    readResult = readString(params, "name", false, name);
+		    if (!readResult.Success)
+		    {
+			    return readResult;
+		    }
+
+		    glm::vec3 position(0.0f);
+		    if (params.Contains("position"))
+		    {
+			    readResult = readVec3(*params.Find("position"), "position", position);
+			    if (!readResult.Success)
+			    {
+				    return readResult;
+			    }
+		    }
+
+		    bool castShadows = true;
+		    readResult = readBool(params, "castShadows", false, castShadows);
+		    if (!readResult.Success)
+		    {
+			    return readResult;
+		    }
+
+		    Entity parentEntity;
+		    if (params.Contains("parent") && !params.Find("parent")->IsNull())
+		    {
+			    Uuid parentUuid;
+			    readResult = readUuid(params, "parent", true, parentUuid);
+			    if (!readResult.Success)
+			    {
+				    return readResult;
+			    }
+			    parentEntity = scene->FindEntity(parentUuid);
+			    if (!parentEntity.IsValid())
+			    {
+				    return CommandResult::Fail(std::format("parent entity '{}' does not exist", parentUuid.ToString()));
+			    }
+		    }
+
+		    const std::filesystem::path resolved = resolveProjectPath(context, path);
+		    std::optional<ImportedModel> model = ModelImporter::Import(resolved);
+		    if (!model.has_value())
+		    {
+			    return CommandResult::Fail(std::format("failed to import '{}' (missing file or unsupported glTF)",
+				    FileSystem::ToUtf8(resolved)));
+		    }
+		    if (!model->Geometry.IsValid() || model->Geometry.GetSubmeshes().empty())
+		    {
+			    return CommandResult::Fail(std::format("'{}' contains no triangle primitives to import",
+				    FileSystem::ToUtf8(resolved)));
+		    }
+
+		    const u32 submeshCount = static_cast<u32>(model->Geometry.GetSubmeshes().size());
+		    const u32 materialCount = static_cast<u32>(model->Materials.size());
+		    const u32 textureCount = static_cast<u32>(model->Textures.size());
+		    if (name.empty())
+		    {
+			    name = FileSystem::ToUtf8(resolved.stem());
+		    }
+
+		    const Uuid meshId = Uuid::Generate();
+		    if (!context.Assets->AddModel(meshId, std::move(*model)))
+		    {
+			    return CommandResult::Fail(std::format("could not upload the imported model '{}' to the GPU", path));
+		    }
+
+		    Entity entity = scene->CreateEntity(name);
+		    MeshRendererComponent renderer;
+		    renderer.Mesh = AssetHandle{ meshId, AssetType::Mesh };
+		    renderer.CastShadows = castShadows;
+		    renderer.Visible = true;
+		    entity.AddComponent<MeshRendererComponent>(renderer);
+		    TransformComponent& transform = entity.GetComponent<TransformComponent>();
+		    transform.LocalPosition = position;
+		    if (parentEntity.IsValid())
+		    {
+			    entity.SetParent(parentEntity);
+		    }
+		    scene->UpdateTransforms();
+
+		    JsonValue result = JsonValue::MakeObject();
+		    result.Set("uuid", entity.GetUuid().ToString());
+		    result.Set("name", name);
+		    result.Set("mesh", meshId.ToString());
+		    result.Set("submeshes", submeshCount);
+		    result.Set("materials", materialCount);
+		    result.Set("textures", textureCount);
+		    result.Set("entityCount", static_cast<u64>(scene->GetEntityCount()));
+		    return CommandResult::Ok(result);
+	    });
 
 	registerCommand(
 	    info("transform.set",
