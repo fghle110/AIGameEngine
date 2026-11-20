@@ -4,7 +4,9 @@
 #include "Aegis/Assets/Material.h"
 #include "Aegis/Assets/Mesh.h"
 #include "Aegis/Assets/Texture.h"
+#include "Aegis/Commands/CommandBus.h"
 #include "Aegis/Core/Application.h"
+#include "Aegis/Math/EditorGizmo.h"
 #include "Aegis/Core/Input.h"
 #include "Aegis/Core/KeyCodes.h"
 #include "Aegis/Events/ApplicationEvent.h"
@@ -1386,6 +1388,8 @@ namespace aegis
 		{
 			drawViewportGrid(viewProjection, glm::vec2(origin.x, origin.y), glm::vec2(size.x, size.y));
 			drawViewportGizmos(viewProjection, glm::vec2(origin.x, origin.y), glm::vec2(size.x, size.y));
+			drawTranslationGizmo(viewProjection, cameraPosition, glm::vec2(origin.x, origin.y),
+				glm::vec2(size.x, size.y));
 
 			char overlay[256];
 			std::snprintf(overlay, sizeof(overlay), "%s | %.0f fps | pos %.1f %.1f %.1f",
@@ -1418,6 +1422,8 @@ namespace aegis
 				m_UseSceneCamera = true;
 			}
 			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::Checkbox("Gizmo", &m_GizmoEnabled);
 		}
 		ImGui::EndChild();
 		ImGui::PopStyleVar(2);
@@ -1425,7 +1431,7 @@ namespace aegis
 
 		// Clicking in the viewport selects the closest entity under the cursor.
 		if (m_ViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && size.x > 1.0f &&
-			!ImGui::IsAnyItemHovered())
+			!ImGui::IsAnyItemHovered() && !m_GizmoConsumedClick)
 		{
 			const ImVec2 mouse = ImGui::GetIO().MousePos;
 			const glm::vec2 viewportPosition((mouse.x - origin.x) / size.x, (mouse.y - origin.y) / size.y);
@@ -1604,6 +1610,183 @@ namespace aegis
 				}
 			}
 		}
+	}
+
+
+	void EditorLayer::drawTranslationGizmo(const glm::mat4& viewProjection, const glm::vec3& cameraPosition,
+		const glm::vec2& origin, const glm::vec2& size)
+	{
+		m_GizmoConsumedClick = false;
+		m_HoveredGizmoAxis = -1;
+		m_GizmoHoveredCenter = false;
+
+		if (!m_GizmoEnabled || m_Scene == nullptr || m_SelectedEntity.IsNull())
+		{
+			m_GizmoDragging = false;
+			m_GizmoDragAxis = -1;
+			return;
+		}
+
+		Entity entity = m_Scene->FindEntity(m_SelectedEntity);
+		if (!entity.IsValid() || !entity.HasComponent<TransformComponent>())
+		{
+			m_GizmoDragging = false;
+			m_GizmoDragAxis = -1;
+			return;
+		}
+		TransformComponent& transform = entity.GetComponent<TransformComponent>();
+		const glm::vec3 worldPosition = glm::vec3(transform.GetWorldTransform()[3]);
+		const TranslationGizmo gizmo = TranslationGizmo::Build(viewProjection, worldPosition, cameraPosition, size);
+
+		const auto rayFromMouse = [&](const glm::vec2& point, glm::vec3& outOrigin, glm::vec3& outDirection)
+		{
+			const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+			const glm::vec2 ndc(point.x / size.x * 2.0f - 1.0f, 1.0f - point.y / size.y * 2.0f);
+			glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndc, 0.0f, 1.0f);
+			glm::vec4 farPoint = inverseViewProjection * glm::vec4(ndc, 1.0f, 1.0f);
+			nearPoint /= nearPoint.w;
+			farPoint /= farPoint.w;
+			outOrigin = glm::vec3(nearPoint);
+			outDirection = glm::normalize(glm::vec3(farPoint) - glm::vec3(nearPoint));
+		};
+
+		const ImVec2 mousePosition = ImGui::GetIO().MousePos;
+		const glm::vec2 mouse(mousePosition.x - origin.x, mousePosition.y - origin.y);
+		const bool mouseInside = mouse.x >= 0.0f && mouse.y >= 0.0f && mouse.x <= size.x && mouse.y <= size.y;
+		const bool canInteract = mouseInside && m_ViewportHovered && !ImGui::IsAnyItemHovered();
+
+		const i32 hoveredAxis = gizmo.HitTestAxis(mouse);
+		const bool hoveredCentre = gizmo.HitTestCenter(mouse);
+		if (canInteract && !m_GizmoDragging)
+		{
+			m_HoveredGizmoAxis = hoveredAxis;
+			m_GizmoHoveredCenter = hoveredAxis < 0 && hoveredCentre;
+		}
+
+		// Start a drag on a handle click. The click is consumed so the entity picker
+		// underneath does not change the selection.
+		if (canInteract && !m_GizmoDragging && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+			(hoveredAxis >= 0 || hoveredCentre))
+		{
+			glm::vec3 rayOrigin(0.0f);
+			glm::vec3 rayDirection(0.0f, 0.0f, -1.0f);
+			rayFromMouse(mouse, rayOrigin, rayDirection);
+
+			glm::vec3 planeNormal = worldPosition - cameraPosition;
+			if (glm::dot(planeNormal, planeNormal) < 1.0e-6f)
+			{
+				planeNormal = -rayDirection;
+			}
+			planeNormal = glm::normalize(planeNormal);
+			const std::optional<glm::vec3> grab = TranslationGizmo::IntersectPlane(rayOrigin, rayDirection,
+				worldPosition, planeNormal);
+			if (grab.has_value())
+			{
+				m_GizmoDragging = true;
+				m_GizmoConsumedClick = true;
+				m_GizmoDragAxis = hoveredAxis;
+				m_GizmoDragStartWorld = worldPosition;
+				m_GizmoDragStartLocal = transform.LocalPosition;
+				m_GizmoDragGrab = *grab;
+				m_GizmoDragPlaneNormal = planeNormal;
+				m_GizmoLastLocal = transform.LocalPosition;
+			}
+		}
+
+		// Continue or finish the drag.
+		if (m_GizmoDragging)
+		{
+			if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+			{
+				m_GizmoDragging = false;
+				m_GizmoDragAxis = -1;
+			}
+			else
+			{
+				glm::vec3 rayOrigin(0.0f);
+				glm::vec3 rayDirection(0.0f, 0.0f, -1.0f);
+				rayFromMouse(mouse, rayOrigin, rayDirection);
+				const std::optional<glm::vec3> hit = TranslationGizmo::IntersectPlane(rayOrigin, rayDirection,
+					m_GizmoDragStartWorld, m_GizmoDragPlaneNormal);
+				if (hit.has_value())
+				{
+					const glm::vec3 delta = TranslationGizmo::Constrain(*hit - m_GizmoDragGrab, m_GizmoDragAxis);
+					glm::vec3 localDelta = delta;
+					if (!transform.Parent.IsNull())
+					{
+						const Entity parent = m_Scene->FindEntity(transform.Parent);
+						if (parent.IsValid() && parent.HasComponent<TransformComponent>())
+						{
+							const glm::mat4 parentWorld = parent.GetComponent<TransformComponent>().GetWorldTransform();
+							localDelta = glm::vec3(glm::inverse(parentWorld) * glm::vec4(delta, 0.0f));
+						}
+					}
+					const glm::vec3 newLocal = m_GizmoDragStartLocal + localDelta;
+					if (glm::dot(newLocal - m_GizmoLastLocal, newLocal - m_GizmoLastLocal) > 1.0e-10f)
+					{
+						m_GizmoLastLocal = newLocal;
+						JsonValue parameters = JsonValue::MakeObject();
+						parameters.Set("uuid", entity.GetUuid().ToString());
+						JsonValue position = JsonValue::MakeArray();
+						position.Push(static_cast<f64>(newLocal.x));
+						position.Push(static_cast<f64>(newLocal.y));
+						position.Push(static_cast<f64>(newLocal.z));
+						parameters.Set("position", std::move(position));
+						const CommandResult result = CommandBus::Get().Execute("transform.set", parameters);
+						if (!result.Success)
+						{
+							AE_CORE_WARN("Gizmo drag could not move '{}': {}", entity.GetName(), result.Error);
+						}
+					}
+				}
+			}
+		}
+
+		// Draw the handles.
+		static const ImU32 c_AxisColors[3] = { IM_COL32(226, 74, 74, 255), IM_COL32(106, 196, 86, 255),
+			IM_COL32(74, 132, 230, 255) };
+		static const char* c_AxisLabels[3] = { "X", "Y", "Z" };
+		const ImU32 highlightColor = IM_COL32(255, 214, 86, 255);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+		for (i32 index = 0; index < 3; ++index)
+		{
+			const ScreenGizmoAxis& axis = gizmo.GetAxis(static_cast<usize>(index));
+			if (!axis.Visible)
+			{
+				continue;
+			}
+			const bool active = m_GizmoDragging && m_GizmoDragAxis == index;
+			const bool hovered = !m_GizmoDragging && m_HoveredGizmoAxis == index;
+			const ImU32 color = (active || hovered) ? highlightColor : c_AxisColors[index];
+			const ImVec2 start(origin.x + axis.ScreenOrigin.x, origin.y + axis.ScreenOrigin.y);
+			const ImVec2 end(origin.x + axis.ScreenEnd.x, origin.y + axis.ScreenEnd.y);
+
+			drawList->AddLine(start, end, color, (active || hovered) ? 3.5f : 2.5f);
+
+			const glm::vec2 direction = axis.ScreenEnd - axis.ScreenOrigin;
+			const f32 length = glm::length(direction);
+			if (length > 1.0f)
+			{
+				const glm::vec2 unit = direction / length;
+				const glm::vec2 perpendicular(-unit.y, unit.x);
+				const f32 arrowLength = 11.0f;
+				const f32 arrowWidth = 5.5f;
+				drawList->AddTriangleFilled(end,
+					ImVec2(end.x - unit.x * arrowLength + perpendicular.x * arrowWidth,
+						end.y - unit.y * arrowLength + perpendicular.y * arrowWidth),
+					ImVec2(end.x - unit.x * arrowLength - perpendicular.x * arrowWidth,
+						end.y - unit.y * arrowLength - perpendicular.y * arrowWidth),
+					color);
+				drawList->AddText(ImVec2(end.x + 5.0f, end.y - 7.0f), color, c_AxisLabels[index]);
+			}
+		}
+
+		const ImVec2 centre(origin.x + gizmo.GetScreenOrigin().x, origin.y + gizmo.GetScreenOrigin().y);
+		const bool centreActive = m_GizmoDragAxis < 0 && m_GizmoDragging;
+		drawList->AddRectFilled(ImVec2(centre.x - 5.0f, centre.y - 5.0f),
+			ImVec2(centre.x + 5.0f, centre.y + 5.0f),
+			(centreActive || m_GizmoHoveredCenter) ? highlightColor : IM_COL32(220, 224, 230, 200));
 	}
 
 	void EditorLayer::drawConsole()

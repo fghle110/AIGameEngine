@@ -91,6 +91,11 @@ namespace aegis
 		void drawViewport();
 		void drawViewportGrid(const glm::mat4& viewProjection, const glm::vec2& origin, const glm::vec2& size);
 		void drawViewportGizmos(const glm::mat4& viewProjection, const glm::vec2& origin, const glm::vec2& size);
+		// Draggable translate handles for the selected entity. The drag writes
+		// through the transform.set command, so the gizmo, the inspector and the AI
+		// API all mutate the scene the same way.
+		void drawTranslationGizmo(const glm::mat4& viewProjection, const glm::vec3& cameraPosition,
+			const glm::vec2& origin, const glm::vec2& size);
 		void drawAddComponentPopup(Entity entity);
 		void handleShortcuts();
 		void drawAutomationFooter();
@@ -122,6 +127,20 @@ namespace aegis
 		u32 m_RegisteredViewportWidth = 0;
 		u32 m_RegisteredViewportHeight = 0;
 		bool m_UseSceneCamera = false;
+
+		// Translation gizmo state. Picking and drag math live in
+		// Aegis/Math/EditorGizmo so they are unit tested without a window.
+		bool m_GizmoEnabled = true;
+		bool m_GizmoConsumedClick = false;
+		bool m_GizmoDragging = false;
+		bool m_GizmoHoveredCenter = false;
+		i32 m_GizmoDragAxis = -1;
+		i32 m_HoveredGizmoAxis = -1;
+		glm::vec3 m_GizmoDragStartWorld{ 0.0f };
+		glm::vec3 m_GizmoDragStartLocal{ 0.0f };
+		glm::vec3 m_GizmoDragGrab{ 0.0f };
+		glm::vec3 m_GizmoDragPlaneNormal{ 0.0f };
+		glm::vec3 m_GizmoLastLocal{ 0.0f };
 
 		EditorCamera m_EditorCamera;
 		EditorAutomationOptions m_Automation;

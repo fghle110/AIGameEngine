@@ -50,9 +50,10 @@ is listed, the engine either ignores the corresponding setting or does not expos
   passed with a warning rather than as skipped. doctest has no `SKIP` status.
 ## Repository-wide status (lead integration pass)
 
-- No direct-manipulation transform gizmo yet: entities are placed with the Inspector
-  fields or the command API (`transform.set`); the viewport draws selection wireframes,
-  a grid and entity icons but no draggable translate/rotate/scale handles.
+- The transform gizmo only translates: it has three world-space axis handles plus a
+  camera-plane centre handle, drags go through `transform.set`, and it has no rotate or
+  scale handles, no local-axis mode and no snapping. Picking and drag math live in
+  `Aegis/Math/EditorGizmo` and are unit tested; the drawing/dragging itself is editor UI.
 - No undo/redo stack. `CommandInfo::Undoable` is false for every command; the registry
   and command handlers are structured so an undo layer can wrap them later.
 - Export copies the runtime executable, compiled shaders and the project folder. There is
