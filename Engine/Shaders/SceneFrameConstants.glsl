@@ -21,7 +21,8 @@ layout(set = 0, binding = 0, std140) uniform SceneFrameConstants
 	vec4 uAmbient;        // rgb = ambient tint, w = intensity
 	vec4 uSunDirection;   // xyz = direction towards the sun, w = intensity
 	vec4 uSunColor;       // rgb = sun colour, w = shadow strength
-	vec4 uPostProcess;    // x = exposure, y = bloom intensity, z = shadow distance, w = flags
+	vec4 uPostProcess;    // x = exposure, y = bloom intensity, z = shadow distance, w = shadow enabled
+	vec4 uEnvironment;    // x = IBL active, y = specular mip count, z = HDRI intensity, w = unused
 	uvec4 uLightCounts;   // x = point/spot light count, y = shadow map index bound
 	SceneLight uLights[8];
 } frame;

@@ -18,6 +18,15 @@ function(ae_add_shaders target)
     file(MAKE_DIRECTORY "${_output_dir}")
     set(_outputs)
 
+    # GLSL sources include each other (SceneFrameConstants.glsl, ...), so every
+    # shader depends on the whole shader source set; otherwise editing an include
+    # would leave stale SPIR-V behind.
+    file(GLOB _shader_dependencies
+        "${AE_SHADER_SOURCE_DIR}/*.glsl"
+        "${AE_SHADER_SOURCE_DIR}/*.vert"
+        "${AE_SHADER_SOURCE_DIR}/*.frag"
+        "${AE_SHADER_SOURCE_DIR}/*.comp")
+
     foreach(_file IN LISTS ARG_FILES)
         get_filename_component(_name "${_file}" NAME)
         set(_source "${AE_SHADER_SOURCE_DIR}/${_file}")
@@ -26,7 +35,7 @@ function(ae_add_shaders target)
             OUTPUT "${_output}"
             COMMAND ${AE_GLSLANG_VALIDATOR_EXECUTABLE} -V --target-env vulkan1.2
                     "-I${AE_SHADER_SOURCE_DIR}" "${_source}" -o "${_output}"
-            DEPENDS "${_source}"
+            DEPENDS "${_source}" ${_shader_dependencies}
             COMMENT "Compiling shader ${_file}"
             VERBATIM)
         list(APPEND _outputs "${_output}")

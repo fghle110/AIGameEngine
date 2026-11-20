@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Aegis/Assets/AssetHandle.h"
+#include "Aegis/Assets/EnvironmentMap.h"
 #include "Aegis/Core/Base.h"
 #include "Aegis/Renderer/AssetCache.h"
 
@@ -49,6 +50,8 @@ namespace aegis
 		glm::vec4 SunDirection{ 0.0f };
 		glm::vec4 SunColor{ 0.0f };
 		glm::vec4 PostProcess{ 1.0f };
+		// x = image-based lighting active, y = specular mip count, z = HDRI intensity, w = unused
+		glm::vec4 Environment{ 0.0f };
 		glm::uvec4 LightCounts{ 0u };
 		std::array<SceneLightConstants, c_MaxSceneLights> Lights{};
 	};
@@ -61,7 +64,7 @@ namespace aegis
 
 	static_assert(sizeof(SceneLightConstants) == 64, "SceneLightConstants must match the std140 layout");
 	static_assert(sizeof(SceneObjectConstants) == 112, "SceneObjectConstants must match the std140 layout");
-	static_assert(sizeof(SceneFrameConstants) == 800, "SceneFrameConstants must match the std140 layout");
+	static_assert(sizeof(SceneFrameConstants) == 816, "SceneFrameConstants must match the std140 layout");
 	static_assert(sizeof(ScenePostConstants) == 16, "ScenePostConstants must match the std140 layout");
 
 	struct SceneRendererStats
@@ -104,6 +107,11 @@ namespace aegis
 
 		AssetCache& GetAssetCache() { return m_AssetCache; }
 		const AssetCache& GetAssetCache() const { return m_AssetCache; }
+
+		// Image-based lighting state for the current environment.
+		bool IsEnvironmentActive() const { return m_EnvironmentActive; }
+		u32 GetEnvironmentMipCount() const { return m_EnvironmentMap.SpecularMipCount; }
+		const EnvironmentMap& GetEnvironmentMap() const { return m_EnvironmentMap; }
 		const SceneRendererStats& GetStats() const { return m_Stats; }
 
 		// Builds the light-space matrix for the scene's directional light, fitted to a
@@ -129,6 +137,12 @@ namespace aegis
 		bool createShadowResources();
 		bool createFrameResources();
 		void releaseFrameResources();
+
+		bool createEnvironmentResources();
+		nvrhi::TextureHandle createCubeTexture(u32 size, u32 mips, const std::string& debugName);
+		void uploadEnvironment(const EnvironmentMap& environment, nvrhi::ICommandList* commandList);
+		void rebuildFrameBindingSet();
+		void updateEnvironment(Scene& scene, nvrhi::ICommandList* commandList);
 
 		void gatherDrawItems(Scene& scene, const glm::vec3& cameraPosition);
 		void fillFrameConstants(Scene& scene, const glm::mat4& viewProjection, const glm::vec3& cameraPosition,
@@ -162,7 +176,17 @@ namespace aegis
 		nvrhi::GraphicsPipelineHandle m_SkyPipeline;
 
 		nvrhi::SamplerHandle m_ShadowSampler;
+		nvrhi::SamplerHandle m_EnvironmentSampler;
 		nvrhi::SamplerHandle m_HdrSampler;
+
+		// Image-based lighting: precomputed cubes + BRDF LUT, swapped when the scene
+		// environment changes. Fallback textures keep the bindings valid when IBL is off.
+		EnvironmentMap m_EnvironmentMap;
+		std::string m_EnvironmentSource;
+		nvrhi::TextureHandle m_IrradianceCube;
+		nvrhi::TextureHandle m_SpecularCube;
+		nvrhi::TextureHandle m_BrdfLut;
+		bool m_EnvironmentActive = false;
 		nvrhi::BufferHandle m_FrameConstantBuffer;
 		nvrhi::BufferHandle m_DepthConstantBuffer;
 		nvrhi::BindingSetHandle m_FrameBindingSet;

@@ -9,7 +9,11 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstring>
+#include <optional>
 
 namespace aegis
 {
@@ -163,7 +167,14 @@ namespace aegis
 		m_FrameConstantBuffer = nullptr;
 		m_DepthConstantBuffer = nullptr;
 		m_ShadowSampler = nullptr;
+		m_EnvironmentSampler = nullptr;
 		m_HdrSampler = nullptr;
+		m_IrradianceCube = nullptr;
+		m_SpecularCube = nullptr;
+		m_BrdfLut = nullptr;
+		m_EnvironmentMap = EnvironmentMap{};
+		m_EnvironmentSource.clear();
+		m_EnvironmentActive = false;
 		m_ShadowMap = nullptr;
 		m_ShadowFramebuffer = nullptr;
 
@@ -186,6 +197,11 @@ namespace aegis
 			nvrhi::BindingLayoutItem::Texture_SRV(1),
 			nvrhi::BindingLayoutItem::Sampler(2),
 			PushConstantItem(3, sizeof(SceneObjectConstants)),
+			// Image-based lighting: irradiance cube, prefiltered specular cube, BRDF LUT.
+			nvrhi::BindingLayoutItem::Texture_SRV(4),
+			nvrhi::BindingLayoutItem::Texture_SRV(5),
+			nvrhi::BindingLayoutItem::Texture_SRV(6),
+			nvrhi::BindingLayoutItem::Sampler(7),
 		};
 		m_FrameBindingLayout = m_Device->createBindingLayout(frameLayoutDesc);
 
@@ -307,21 +323,99 @@ namespace aegis
 			return false;
 		}
 
+		nvrhi::SamplerDesc environmentSamplerDesc;
+		environmentSamplerDesc.setMinFilter(true);
+		environmentSamplerDesc.setMagFilter(true);
+		environmentSamplerDesc.setMipFilter(true);
+		environmentSamplerDesc.setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
+		m_EnvironmentSampler = m_Device->createSampler(environmentSamplerDesc);
+		if (m_EnvironmentSampler == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the environment sampler");
+			return false;
+		}
+
 		nvrhi::BindingSetDesc depthSetDesc;
 		depthSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_DepthConstantBuffer));
 		m_DepthBindingSet = m_Device->createBindingSet(depthSetDesc, m_DepthBindingLayout);
 
-		nvrhi::BindingSetDesc frameSetDesc;
-		frameSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer));
-		frameSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_ShadowMap));
-		frameSetDesc.addItem(nvrhi::BindingSetItem::Sampler(2, m_ShadowSampler));
-		m_FrameBindingSet = m_Device->createBindingSet(frameSetDesc, m_FrameBindingLayout);
-
-		if (m_DepthBindingSet == nullptr || m_FrameBindingSet == nullptr)
+		if (m_DepthBindingSet == nullptr || !createEnvironmentResources())
 		{
 			AE_CORE_CRITICAL("Could not create the scene binding sets");
 			return false;
 		}
+		rebuildFrameBindingSet();
+		if (m_FrameBindingSet == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the frame binding set");
+			return false;
+		}
+		return true;
+	}
+
+	nvrhi::TextureHandle SceneRenderer::createCubeTexture(u32 size, u32 mips, const std::string& debugName)
+	{
+		nvrhi::TextureDesc desc;
+		desc.width = size;
+		desc.height = size;
+		desc.arraySize = 6;
+		desc.mipLevels = mips;
+		desc.format = nvrhi::Format::RGBA16_FLOAT;
+		desc.dimension = nvrhi::TextureDimension::TextureCube;
+		desc.isShaderResource = true;
+		desc.isRenderTarget = false;
+		desc.isUAV = false;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		desc.debugName = debugName;
+		return m_Device->createTexture(desc);
+	}
+
+	bool SceneRenderer::createEnvironmentResources()
+	{
+		// 1x1 fallbacks keep the descriptor set valid while IBL is disabled; the
+		// shader ignores them whenever uEnvironment.x is zero.
+		m_IrradianceCube = createCubeTexture(1, 1, "IBL fallback irradiance");
+		m_SpecularCube = createCubeTexture(1, 1, "IBL fallback specular");
+		if (m_IrradianceCube == nullptr || m_SpecularCube == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the IBL fallback cubes");
+			return false;
+		}
+
+		nvrhi::TextureDesc lutDesc;
+		lutDesc.width = 1;
+		lutDesc.height = 1;
+		lutDesc.format = nvrhi::Format::RGBA16_FLOAT;
+		lutDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		lutDesc.isShaderResource = true;
+		lutDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		lutDesc.keepInitialState = true;
+		lutDesc.debugName = "IBL fallback BRDF LUT";
+		m_BrdfLut = m_Device->createTexture(lutDesc);
+		if (m_BrdfLut == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the BRDF LUT fallback");
+			return false;
+		}
+
+		// RGBA16F textures need packed half floats; writeTexture does not convert.
+		const std::array<u32, 2> white = { glm::packHalf2x16(glm::vec2(1.0f, 1.0f)),
+			glm::packHalf2x16(glm::vec2(1.0f, 1.0f)) };
+		const std::array<u32, 2> brdfFallback = { glm::packHalf2x16(glm::vec2(1.0f, 0.0f)),
+			glm::packHalf2x16(glm::vec2(0.0f, 1.0f)) };
+		nvrhi::CommandListHandle upload = m_Device->createCommandList();
+		upload->open();
+		for (u32 face = 0; face < 6; ++face)
+		{
+			upload->writeTexture(m_IrradianceCube, face, 0, white.data(), white.size() * sizeof(u32));
+			upload->writeTexture(m_SpecularCube, face, 0, white.data(), white.size() * sizeof(u32));
+		}
+		upload->writeTexture(m_BrdfLut, 0, 0, brdfFallback.data(), brdfFallback.size() * sizeof(u32));
+		upload->close();
+		nvrhi::ICommandList* raw = upload;
+		m_Device->executeCommandLists(&raw, 1);
+		m_Device->waitForIdle();
 		return true;
 	}
 
@@ -571,6 +665,184 @@ namespace aegis
 		}
 	}
 
+	void SceneRenderer::rebuildFrameBindingSet()
+	{
+		if (m_Device == nullptr || m_FrameConstantBuffer == nullptr || m_ShadowMap == nullptr ||
+			m_IrradianceCube == nullptr || m_SpecularCube == nullptr || m_BrdfLut == nullptr ||
+			m_EnvironmentSampler == nullptr)
+		{
+			return;
+		}
+
+		nvrhi::BindingSetDesc frameSetDesc;
+		frameSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer));
+		frameSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_ShadowMap));
+		frameSetDesc.addItem(nvrhi::BindingSetItem::Sampler(2, m_ShadowSampler));
+		nvrhi::BindingSetItem irradianceItem = nvrhi::BindingSetItem::Texture_SRV(4, m_IrradianceCube);
+		irradianceItem.dimension = nvrhi::TextureDimension::TextureCube;
+		frameSetDesc.addItem(irradianceItem);
+		nvrhi::BindingSetItem specularItem = nvrhi::BindingSetItem::Texture_SRV(5, m_SpecularCube);
+		specularItem.dimension = nvrhi::TextureDimension::TextureCube;
+		frameSetDesc.addItem(specularItem);
+		frameSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(6, m_BrdfLut));
+		frameSetDesc.addItem(nvrhi::BindingSetItem::Sampler(7, m_EnvironmentSampler));
+		m_FrameBindingSet = m_Device->createBindingSet(frameSetDesc, m_FrameBindingLayout);
+		if (m_FrameBindingSet == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not rebuild the frame binding set after the environment changed");
+		}
+	}
+
+	void SceneRenderer::uploadEnvironment(const EnvironmentMap& environment, nvrhi::ICommandList* commandList)
+	{
+		(void)commandList;
+		if (!environment.IsValid())
+		{
+			return;
+		}
+
+		nvrhi::TextureHandle irradiance = createCubeTexture(environment.IrradianceSize, 1, "IBL irradiance");
+		nvrhi::TextureHandle specular = createCubeTexture(environment.SpecularSize, environment.SpecularMipCount,
+			"IBL prefiltered specular");
+		if (irradiance == nullptr || specular == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the IBL cube textures");
+			return;
+		}
+
+		nvrhi::TextureDesc lutDesc;
+		lutDesc.width = environment.BrdfSize;
+		lutDesc.height = environment.BrdfSize;
+		lutDesc.format = nvrhi::Format::RGBA16_FLOAT;
+		lutDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		lutDesc.isShaderResource = true;
+		lutDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		lutDesc.keepInitialState = true;
+		lutDesc.debugName = "IBL BRDF LUT";
+		nvrhi::TextureHandle brdfLut = m_Device->createTexture(lutDesc);
+		if (brdfLut == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the BRDF LUT");
+			return;
+		}
+
+		nvrhi::CommandListHandle upload = m_Device->createCommandList();
+		upload->open();
+
+		// RGBA16F upload: two half2 per texel. writeTexture copies raw bytes, so the
+		// data must already be in the texture format.
+		const auto packRgba16f = [](const std::vector<glm::vec3>& source, std::vector<u32>& out)
+		{
+			out.resize(source.size() * 2);
+			for (usize i = 0; i < source.size(); ++i)
+			{
+				out[i * 2] = glm::packHalf2x16(glm::vec2(source[i].x, source[i].y));
+				out[i * 2 + 1] = glm::packHalf2x16(glm::vec2(source[i].z, 1.0f));
+			}
+		};
+
+		std::vector<u32> staging;
+		for (u32 face = 0; face < 6; ++face)
+		{
+			packRgba16f(environment.Irradiance[face], staging);
+			upload->writeTexture(irradiance, face, 0, staging.data(),
+				static_cast<usize>(environment.IrradianceSize) * 2 * sizeof(u32));
+		}
+
+		for (u32 mip = 0; mip < environment.SpecularMipCount && mip < static_cast<u32>(environment.Specular.size()); ++mip)
+		{
+			const u32 mipSize = std::max(1u, environment.SpecularSize >> mip);
+			for (u32 face = 0; face < 6; ++face)
+			{
+				packRgba16f(environment.Specular[mip][face], staging);
+				upload->writeTexture(specular, face, mip, staging.data(),
+					static_cast<usize>(mipSize) * 2 * sizeof(u32));
+			}
+		}
+
+		staging.resize(environment.Brdf.size() * 2);
+		for (usize i = 0; i < environment.Brdf.size(); ++i)
+		{
+			staging[i * 2] = glm::packHalf2x16(glm::vec2(environment.Brdf[i].x, environment.Brdf[i].y));
+			staging[i * 2 + 1] = glm::packHalf2x16(glm::vec2(0.0f, 1.0f));
+		}
+		upload->writeTexture(brdfLut, 0, 0, staging.data(),
+			static_cast<usize>(environment.BrdfSize) * 2 * sizeof(u32));
+
+		upload->close();
+		nvrhi::ICommandList* rawUpload = upload;
+		m_Device->executeCommandLists(&rawUpload, 1);
+		m_Device->waitForIdle();
+
+		m_IrradianceCube = std::move(irradiance);
+		m_SpecularCube = std::move(specular);
+		m_BrdfLut = std::move(brdfLut);
+	}
+
+	void SceneRenderer::updateEnvironment(Scene& scene, nvrhi::ICommandList* commandList)
+	{
+		const EnvironmentSettings& environment = scene.GetEnvironment();
+		const std::string key = environment.EnableIBL ? environment.HdriPath : std::string();
+
+		if (!environment.EnableIBL)
+		{
+			// The shader skips IBL entirely when the flag is zero; the previously
+			// uploaded cubes stay bound so no mid-frame upload is needed.
+			m_EnvironmentActive = false;
+			return;
+		}
+
+		if (m_EnvironmentActive && key == m_EnvironmentSource && m_EnvironmentMap.IsValid())
+		{
+			return;
+		}
+
+		const auto start = std::chrono::steady_clock::now();
+		EnvironmentMap map;
+		if (!key.empty())
+		{
+			const FileSystem::Path path = FileSystem::FromUtf8(key);
+			if (!FileSystem::IsFile(path))
+			{
+				AE_CORE_WARN("HDRI '{}' was not found; using the procedural sky for IBL", key);
+				map = EnvironmentMap::BuildProceduralSky();
+			}
+			else if (std::optional<EnvironmentMap> loaded = EnvironmentMap::LoadFromHdrFile(path))
+			{
+				map = std::move(*loaded);
+			}
+			else
+			{
+				map = EnvironmentMap::BuildProceduralSky();
+			}
+		}
+		else
+		{
+			// The procedural sky never changes: precompute it once per process and
+			// upload it into each device's cubes.
+			static const EnvironmentMap s_ProceduralSky = EnvironmentMap::BuildProceduralSky();
+			map = s_ProceduralSky;
+		}
+
+		if (!map.IsValid())
+		{
+			AE_CORE_ERROR("Could not build the environment map; keeping the previous one");
+			return;
+		}
+
+		uploadEnvironment(map, commandList);
+		m_EnvironmentMap = std::move(map);
+		m_EnvironmentSource = key;
+		m_EnvironmentActive = true;
+		rebuildFrameBindingSet();
+
+		const f64 milliseconds =
+			std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - start).count();
+		AE_CORE_INFO("IBL environment '{}' built ({}² specular, {} mips, {}² BRDF) in {:.1f} ms",
+			key.empty() ? "procedural sky" : key, m_EnvironmentMap.SpecularSize, m_EnvironmentMap.SpecularMipCount,
+			m_EnvironmentMap.BrdfSize, milliseconds);
+	}
+
 	void SceneRenderer::gatherDrawItems(Scene& scene, const glm::vec3& cameraPosition)
 	{
 		(void)cameraPosition;
@@ -728,6 +1000,8 @@ namespace aegis
 		m_FrameConstants.LightCounts.x = pointLightCount;
 		m_FrameConstants.PostProcess = glm::vec4(Max(environment.Exposure, 0.0f), environment.BloomIntensity,
 			environment.ShadowDistance, renderShadows ? 1.0f : 0.0f);
+		m_FrameConstants.Environment = glm::vec4(m_EnvironmentActive ? 1.0f : 0.0f,
+			static_cast<f32>(Max(m_EnvironmentMap.SpecularMipCount, 1u)), environment.HdriIntensity, 0.0f);
 		m_Stats.PointLights = pointLightCount;
 	}
 
@@ -849,6 +1123,7 @@ namespace aegis
 		}
 
 		m_Stats = SceneRendererStats{};
+		updateEnvironment(scene, commandList);
 		gatherDrawItems(scene, cameraPosition);
 		fillFrameConstants(scene, viewProjection, cameraPosition, lightViewProjection, renderShadows);
 

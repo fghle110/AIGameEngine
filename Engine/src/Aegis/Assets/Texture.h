@@ -66,6 +66,9 @@ namespace aegis
 		// Bytes holds width * height * 4 values in row-major RGBA order.
 		static Image FromRgba8(u32 width, u32 height, const u8* bytes, TextureColorSpace colorSpace);
 		static Image CreateSolid(u32 width, u32 height, const glm::vec4& linearColor);
+		// Builds an image from linear RGBA32F pixels (HDR environment authors, IBL
+		// precomputation and tests). Generates no mips; call GenerateMips().
+		static Image FromLinearRgba(u32 width, u32 height, std::vector<f32> linearPixels);
 		static Image CreateCheckerboard(u32 width, u32 height, u32 cellPixels, const glm::vec3& colorA,
 			const glm::vec3& colorB);
 

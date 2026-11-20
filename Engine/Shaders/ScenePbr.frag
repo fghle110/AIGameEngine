@@ -13,6 +13,10 @@
 
 layout(set = 0, binding = 1) uniform texture2D uShadowMap;
 layout(set = 0, binding = 2) uniform sampler uShadowSampler;
+layout(set = 0, binding = 4) uniform textureCube uIrradianceCube;
+layout(set = 0, binding = 5) uniform textureCube uPrefilteredCube;
+layout(set = 0, binding = 6) uniform texture2D uBrdfLut;
+layout(set = 0, binding = 7) uniform sampler uEnvironmentSampler;
 
 layout(set = 1, binding = 0) uniform texture2D uAlbedoTexture;
 layout(set = 1, binding = 1) uniform texture2D uNormalTexture;
@@ -203,14 +207,34 @@ void main()
 		outgoing += shadeLight(normal, view, lightDirection, radiance, baseColor, metallic, roughness, f0);
 	}
 
-	// Ambient: procedural sky irradiance for the diffuse lobe and a roughness-aware
-	// specular reflection of the same sky.
+	// Ambient: image-based lighting when the environment map is active, otherwise the
+	// procedural sky. The cubes are prefiltered on the CPU when the environment
+	// changes, so this is the split-sum approximation with a real BRDF LUT.
 	const vec3 ambientTint = frame.uAmbient.rgb * frame.uAmbient.w;
-	const vec3 diffuseAmbient = skyRadiance(normal) * baseColor * (1.0 - metallic);
-	const vec3 reflected = reflect(-view, normal);
-	const vec3 specularAmbient = skyRadiance(reflected) *
-		fresnelSchlickRoughness(max(dot(normal, view), 0.0), f0, roughness) * (1.0 - roughness * 0.7);
-	outgoing += (diffuseAmbient + specularAmbient) * ambientTint * occlusion;
+	vec3 ambientLighting = vec3(0.0);
+	if (frame.uEnvironment.x > 0.5)
+	{
+		const float intensity = max(frame.uEnvironment.z, 0.0);
+		const vec3 irradiance = texture(samplerCube(uIrradianceCube, uEnvironmentSampler), normal).rgb;
+		const vec3 diffuseAmbient = irradiance * baseColor * (1.0 - metallic);
+		const vec3 reflected = reflect(-view, normal);
+		const float mipCount = max(frame.uEnvironment.y, 1.0);
+		const vec3 prefiltered = textureLod(samplerCube(uPrefilteredCube, uEnvironmentSampler), reflected,
+			roughness * (mipCount - 1.0)).rgb;
+		const vec2 brdf = texture(sampler2D(uBrdfLut, uEnvironmentSampler),
+			vec2(max(dot(normal, view), 0.0), roughness)).rg;
+		const vec3 specularAmbient = prefiltered * (f0 * brdf.x + brdf.y);
+		ambientLighting = (diffuseAmbient + specularAmbient) * intensity;
+	}
+	else
+	{
+		const vec3 diffuseAmbient = skyRadiance(normal) * baseColor * (1.0 - metallic);
+		const vec3 reflected = reflect(-view, normal);
+		const vec3 specularAmbient = skyRadiance(reflected) *
+			fresnelSchlickRoughness(max(dot(normal, view), 0.0), f0, roughness) * (1.0 - roughness * 0.7);
+		ambientLighting = (diffuseAmbient + specularAmbient) * ambientTint;
+	}
+	outgoing += ambientLighting * occlusion;
 
 	const vec3 emissive = object.uEmissive.rgb * object.uEmissive.w *
 		texture(sampler2D(uEmissiveTexture, uEmissiveSampler), vTexCoord).rgb;

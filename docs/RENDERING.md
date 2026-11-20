@@ -9,7 +9,8 @@ outside `Aegis/Renderer` and `Aegis/Assets` includes NVRHI headers.
 
 ```
 Renderer::BeginFrame          acquire swapchain image, open the frame command list, clear
-  SceneRenderer::Render       1. shadow map pass (depth only, 2048x2048)
+  SceneRenderer::Render       0. IBL environment upload when the HDRI changed
+                              1. shadow map pass (depth only, 2048x2048)
                               2. forward PBR pass into RGBA16F + D32, starting with the sky
                               3. post pass: exposure -> ACES -> SRGB8 display texture
   ImGuiRenderer::Render       UI, including the viewport image that samples the display texture
@@ -19,6 +20,24 @@ Renderer::EndFrame            submit, present, garbage collect
 `SceneRenderer::Render` records every pass into the command list it is given, so the
 editor can draw its UI in the same submission and the exported runtime can run with no
 UI at all.
+
+## Image-based lighting
+
+When the scene sets `EnvironmentSettings.HdriPath` (or leaves it empty and `EnableIBL` is on)
+the renderer builds an `aegis::EnvironmentMap` once and uploads it as three textures:
+
+- an irradiance cube (already divided by PI, so diffuse = albedo * irradiance),
+- a GGX-prefiltered specular cube with one mip per roughness step,
+- a split-sum BRDF LUT.
+
+All three are prefiltered on the CPU (`Engine/src/Aegis/Assets/EnvironmentMap.cpp`) from an
+equirectangular image: any Poly Haven `.hdr` or the procedural sky from
+`Engine/Shaders/SceneSky.glsl`. The PBR shader samples them when `uEnvironment.x` is set and
+falls back to the analytic sky otherwise. Because the data is plain C++, the prefilter logic
+is covered by GPU-free unit tests (`Tests/Renderer/EnvironmentMapTests.cpp`).
+
+The cube textures are RGBA16F and are uploaded with packed half floats: NVRHI's
+`writeTexture` copies raw bytes, it does not convert formats.
 
 ## Render targets
 

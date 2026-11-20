@@ -5,11 +5,13 @@ is listed, the engine either ignores the corresponding setting or does not expos
 
 ## Rendering
 
-- **No image-based lighting.** `EnvironmentSettings.HdriPath`, `HdriIntensity` and
-  `EnableIBL` are serialised but ignored. Ambient light comes from the procedural sky in
-  `Engine/Shaders/SceneSky.glsl`; there is no equirectangular HDR import, no irradiance or
-  prefiltered specular cube and no BRDF LUT, so metals reflect a cheap gradient instead of
-  a real environment.
+- **Image-based lighting exists but is prefiltered on the CPU.** `EnvironmentSettings.HdriPath`
+  loads any equirectangular `.hdr` (Poly Haven HDRIs work unchanged); when empty, the
+  procedural sky is prefiltered instead. The prefilter (irradiance cube, GGX specular mip
+  chain, split-sum BRDF LUT) runs once per environment in `Assets/EnvironmentMap.cpp` at
+  48²/24²/32², which takes about a second in a debug build on the reference laptop. There
+  is no GPU prefilter and no disk cache yet, and a scene with several different HDRIs pays
+  that cost per environment switch.
 - **No screen-space ambient occlusion.** `EnvironmentSettings.EnableSSAO`, `SSAORadius`
   and `EnableFXAA` are serialised but ignored. The PBR pass has no depth prepass, so it
   cannot read the depth of the current frame; SSAO needs that prepass (or a deferred

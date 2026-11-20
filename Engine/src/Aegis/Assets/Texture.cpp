@@ -131,6 +131,19 @@ namespace aegis
 		return create(width, height, std::move(pixels));
 	}
 
+	Image Image::FromLinearRgba(u32 width, u32 height, std::vector<f32> linearPixels)
+	{
+		Image image;
+		if (width == 0 || height == 0 || linearPixels.size() < static_cast<usize>(width) * height * 4)
+		{
+			return image;
+		}
+		image.m_Width = width;
+		image.m_Height = height;
+		image.m_Mips.push_back(std::move(linearPixels));
+		return image;
+	}
+
 	Image Image::CreateSolid(u32 width, u32 height, const glm::vec4& linearColor)
 	{
 		std::vector<f32> pixels(static_cast<usize>(width) * height * 4, 0.0f);
