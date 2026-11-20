@@ -6,10 +6,13 @@
 
 layout(set = 0, binding = 0) uniform texture2D uHdrColor;
 layout(set = 0, binding = 1) uniform sampler uHdrSampler;
+layout(set = 0, binding = 2) uniform texture2D uBloomTexture;
+layout(set = 0, binding = 3) uniform sampler uBloomSampler;
 
 layout(push_constant) uniform ScenePostConstants
 {
 	vec4 uPostProcess; // x = exposure, y = bloom intensity, z = unused, w = unused
+	vec4 uBloom;       // x = bloom intensity, y = threshold, z = bloom active flag, w = unused
 } post;
 
 layout(location = 0) in vec2 vTexCoord;
@@ -29,7 +32,12 @@ vec3 tonemapAces(vec3 color)
 void main()
 {
 	const vec3 hdr = texture(sampler2D(uHdrColor, uHdrSampler), vTexCoord).rgb;
-	const vec3 exposed = max(hdr, vec3(0.0)) * post.uPostProcess.x;
+	// Additive bloom before exposure: the blur chain already carries the energy of
+	// the bright pass, so only an intensity scale is applied here.
+	const vec3 bloom = texture(sampler2D(uBloomTexture, uBloomSampler), vTexCoord).rgb;
+	const float bloomAmount = post.uBloom.x * step(0.5, post.uBloom.z);
+	const vec3 lit = max(hdr + bloom * bloomAmount, vec3(0.0));
+	const vec3 exposed = lit * post.uPostProcess.x;
 	const vec3 mapped = tonemapAces(exposed);
 	oColor = vec4(mapped, 1.0);
 }

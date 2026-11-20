@@ -14,6 +14,8 @@ Renderer::BeginFrame          acquire swapchain image, open the frame command li
                               1b. SSAO (optional): camera depth prepass, half-res AO
                                   noise pass and a 9x9 blur, consumed by the PBR ambient term
                               2. forward PBR pass into RGBA16F + D32, starting with the sky
+                              2b. bloom (optional): soft-knee bright pass at half resolution,
+                                  horizontal blur, vertical blur, then an additive composite
                               3. post pass: exposure -> ACES -> SRGB8 display texture
   ImGuiRenderer::Render       UI, including the viewport image that samples the display texture
 Renderer::EndFrame            submit, present, garbage collect
@@ -57,6 +59,18 @@ The cube textures are RGBA16F and are uploaded with packed half floats: NVRHI's
 
 The AO strength lives in `uEnvironment.w`, so the same switch also disables the
 multiply when the passes are skipped.
+
+## Bloom
+
+`EnvironmentSettings.EnableBloom` (with `BloomThreshold` and `BloomIntensity`) runs a compact
+chain between the forward and tonemap passes:
+
+1. `BloomPrefilter.frag` samples the HDR target 2x2, halves the resolution and applies a
+   soft-knee threshold so only real highlights contribute.
+2. `BloomBlur.frag` runs a separable 9-tap gaussian twice, ping-ponging between two
+   half-resolution RGBA16F targets.
+3. `SceneTonemap.frag` adds the result scaled by the intensity before exposure, so the
+   bloom is metered in scene-referred units and no tone-mapping happens twice.
 
 ## Render targets
 

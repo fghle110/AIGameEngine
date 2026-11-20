@@ -74,6 +74,7 @@ ae_add_shaders(Aegis FILES
     SceneDepthOnly.vert
     ScenePbr.vert ScenePbr.frag
     ScenePost.vert SceneTonemap.frag SceneSky.frag
-    SceneSsao.frag SceneSsaoBlur.frag)
+    SceneSsao.frag SceneSsaoBlur.frag
+    BloomPrefilter.frag BloomBlur.frag)
 
 ae_apply_warnings(Aegis)

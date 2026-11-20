@@ -71,7 +71,7 @@ namespace aegis
 		nvrhi::BindingLayoutItem PushConstantItem(u32 slot, usize size)
 		{
 			nvrhi::BindingLayoutItem item{};
-			item.setType(nvrhi::ResourceType::PushConstants).setSlot(slot).setSize(size);
+			item.setType(nvrhi::ResourceType::PushConstants).setSlot(slot).setSize(static_cast<u32>(size));
 			return item;
 		}
 
@@ -170,6 +170,18 @@ namespace aegis
 		m_AoTexture = nullptr;
 		m_AoBlurTexture = nullptr;
 		m_AoFallback = nullptr;
+		m_BloomTextureA = nullptr;
+		m_BloomTextureB = nullptr;
+		m_BloomFramebufferA = nullptr;
+		m_BloomFramebufferB = nullptr;
+		m_BloomPrefilterBindingSet = nullptr;
+		m_BloomBlurBindingSetA = nullptr;
+		m_BloomBlurBindingSetB = nullptr;
+		m_BloomPrefilterPipeline = nullptr;
+		m_BloomBlurPipeline = nullptr;
+		m_BloomPrefilterPixelShader = nullptr;
+		m_BloomBlurPixelShader = nullptr;
+		m_BloomActive = false;
 		m_PrepassFramebuffer = nullptr;
 		m_AoFramebuffer = nullptr;
 		m_AoBlurFramebuffer = nullptr;
@@ -270,7 +282,10 @@ namespace aegis
 		postLayoutDesc.bindings = {
 			nvrhi::BindingLayoutItem::Texture_SRV(0),
 			nvrhi::BindingLayoutItem::Sampler(1),
-			PushConstantItem(2, sizeof(ScenePostConstants)),
+			// Bloom result composited before exposure.
+			nvrhi::BindingLayoutItem::Texture_SRV(2),
+			nvrhi::BindingLayoutItem::Sampler(3),
+			PushConstantItem(4, sizeof(ScenePostConstants)),
 		};
 		m_PostBindingLayout = m_Device->createBindingLayout(postLayoutDesc);
 
@@ -534,7 +549,11 @@ namespace aegis
 		std::vector<u8> skyPixelBytecode;
 		std::vector<u8> ssaoPixelBytecode;
 		std::vector<u8> ssaoBlurPixelBytecode;
-		if (!LoadShaderBytecode(shaderDirectory, "SceneSsao.frag.spv", ssaoPixelBytecode) ||
+		std::vector<u8> bloomPrefilterBytecode;
+		std::vector<u8> bloomBlurBytecode;
+		if (!LoadShaderBytecode(shaderDirectory, "BloomPrefilter.frag.spv", bloomPrefilterBytecode) ||
+			!LoadShaderBytecode(shaderDirectory, "BloomBlur.frag.spv", bloomBlurBytecode) ||
+			!LoadShaderBytecode(shaderDirectory, "SceneSsao.frag.spv", ssaoPixelBytecode) ||
 			!LoadShaderBytecode(shaderDirectory, "SceneSsaoBlur.frag.spv", ssaoBlurPixelBytecode) ||
 			!LoadShaderBytecode(shaderDirectory, "SceneSky.frag.spv", skyPixelBytecode) ||
 			!LoadShaderBytecode(shaderDirectory, "ScenePbr.vert.spv", pbrVertexBytecode) ||
@@ -558,10 +577,14 @@ namespace aegis
 		m_SsaoPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, ssaoPixelBytecode, "SceneSsao.frag");
 		m_SsaoBlurPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, ssaoBlurPixelBytecode,
 			"SceneSsaoBlur.frag");
+		m_BloomPrefilterPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, bloomPrefilterBytecode,
+			"BloomPrefilter.frag");
+		m_BloomBlurPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, bloomBlurBytecode, "BloomBlur.frag");
 
 		return m_PbrVertexShader != nullptr && m_PbrPixelShader != nullptr && m_DepthVertexShader != nullptr &&
 			   m_FullscreenVertexShader != nullptr && m_TonemapPixelShader != nullptr &&
-			   m_SkyPixelShader != nullptr && m_SsaoPixelShader != nullptr && m_SsaoBlurPixelShader != nullptr;
+			   m_SkyPixelShader != nullptr && m_SsaoPixelShader != nullptr && m_SsaoBlurPixelShader != nullptr &&
+			   m_BloomPrefilterPixelShader != nullptr && m_BloomBlurPixelShader != nullptr;
 	}
 
 	bool SceneRenderer::createPipelines()
@@ -700,9 +723,33 @@ namespace aegis
 		ssaoBlurDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
 		m_SsaoBlurPipeline = m_Device->createGraphicsPipeline(ssaoBlurDesc, aoInfo);
 
+		nvrhi::FramebufferInfo bloomInfo;
+		bloomInfo.addColorFormat(c_HdrFormat);
+		bloomInfo.setSampleCount(1);
+
+		nvrhi::GraphicsPipelineDesc bloomPrefilterDesc;
+		bloomPrefilterDesc.setPrimType(nvrhi::PrimitiveType::TriangleList);
+		bloomPrefilterDesc.setVertexShader(m_FullscreenVertexShader);
+		bloomPrefilterDesc.setPixelShader(m_BloomPrefilterPixelShader);
+		bloomPrefilterDesc.bindingLayouts = { m_BlurBindingLayout };
+		bloomPrefilterDesc.renderState.depthStencilState.depthTestEnable = false;
+		bloomPrefilterDesc.renderState.depthStencilState.depthWriteEnable = false;
+		bloomPrefilterDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+		m_BloomPrefilterPipeline = m_Device->createGraphicsPipeline(bloomPrefilterDesc, bloomInfo);
+
+		nvrhi::GraphicsPipelineDesc bloomBlurDesc;
+		bloomBlurDesc.setPrimType(nvrhi::PrimitiveType::TriangleList);
+		bloomBlurDesc.setVertexShader(m_FullscreenVertexShader);
+		bloomBlurDesc.setPixelShader(m_BloomBlurPixelShader);
+		bloomBlurDesc.bindingLayouts = { m_BlurBindingLayout };
+		bloomBlurDesc.renderState.depthStencilState.depthTestEnable = false;
+		bloomBlurDesc.renderState.depthStencilState.depthWriteEnable = false;
+		bloomBlurDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+		m_BloomBlurPipeline = m_Device->createGraphicsPipeline(bloomBlurDesc, bloomInfo);
+
 		if (m_ShadowPipeline == nullptr || m_PbrPipeline == nullptr || m_TonemapPipeline == nullptr ||
 			m_SkyPipeline == nullptr || m_PrepassPipeline == nullptr || m_SsaoPipeline == nullptr ||
-			m_SsaoBlurPipeline == nullptr)
+			m_SsaoBlurPipeline == nullptr || m_BloomPrefilterPipeline == nullptr || m_BloomBlurPipeline == nullptr)
 		{
 			AE_CORE_CRITICAL("Could not create the scene graphics pipelines");
 			return false;
@@ -723,8 +770,15 @@ namespace aegis
 		m_AoBlurFramebuffer = nullptr;
 		m_SsaoBindingSet = nullptr;
 		m_BlurBindingSet = nullptr;
+		m_BloomPrefilterBindingSet = nullptr;
+		m_BloomBlurBindingSetA = nullptr;
+		m_BloomBlurBindingSetB = nullptr;
+		m_BloomFramebufferA = nullptr;
+		m_BloomFramebufferB = nullptr;
 		m_AoTexture = m_AoFallback;
 		m_AoBlurTexture = nullptr;
+		m_BloomTextureA = nullptr;
+		m_BloomTextureB = nullptr;
 	}
 
 	bool SceneRenderer::createFrameResources()
@@ -797,9 +851,51 @@ namespace aegis
 			m_HdrSampler = m_Device->createSampler(hdrSamplerDesc);
 		}
 
+		// Bloom chain: a half-resolution bright pass, then two separable gaussian
+		// blurs that ping-pong between two targets.
+		const u32 bloomWidth = Max(m_Width / 2, 1u);
+		const u32 bloomHeight = Max(m_Height / 2, 1u);
+		nvrhi::TextureDesc bloomDesc;
+		bloomDesc.width = bloomWidth;
+		bloomDesc.height = bloomHeight;
+		bloomDesc.format = c_HdrFormat;
+		bloomDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		bloomDesc.isRenderTarget = true;
+		bloomDesc.isShaderResource = true;
+		bloomDesc.initialState = nvrhi::ResourceStates::RenderTarget;
+		bloomDesc.keepInitialState = true;
+		bloomDesc.debugName = "Bloom A";
+		m_BloomTextureA = m_Device->createTexture(bloomDesc);
+		bloomDesc.debugName = "Bloom B";
+		m_BloomTextureB = m_Device->createTexture(bloomDesc);
+
+		nvrhi::FramebufferDesc bloomFramebufferDesc;
+		bloomFramebufferDesc.addColorAttachment(m_BloomTextureA);
+		m_BloomFramebufferA = m_Device->createFramebuffer(bloomFramebufferDesc);
+		nvrhi::FramebufferDesc bloomFramebufferDescB;
+		bloomFramebufferDescB.addColorAttachment(m_BloomTextureB);
+		m_BloomFramebufferB = m_Device->createFramebuffer(bloomFramebufferDescB);
+
+		nvrhi::BindingSetDesc bloomPrefilterSetDesc;
+		bloomPrefilterSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_HdrColor));
+		bloomPrefilterSetDesc.addItem(nvrhi::BindingSetItem::Sampler(1, m_HdrSampler));
+		m_BloomPrefilterBindingSet = m_Device->createBindingSet(bloomPrefilterSetDesc, m_BlurBindingLayout);
+
+		nvrhi::BindingSetDesc bloomBlurSetDesc;
+		bloomBlurSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_BloomTextureA));
+		bloomBlurSetDesc.addItem(nvrhi::BindingSetItem::Sampler(1, m_HdrSampler));
+		m_BloomBlurBindingSetA = m_Device->createBindingSet(bloomBlurSetDesc, m_BlurBindingLayout);
+
+		nvrhi::BindingSetDesc bloomBlurSetDescB;
+		bloomBlurSetDescB.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_BloomTextureB));
+		bloomBlurSetDescB.addItem(nvrhi::BindingSetItem::Sampler(1, m_HdrSampler));
+		m_BloomBlurBindingSetB = m_Device->createBindingSet(bloomBlurSetDescB, m_BlurBindingLayout);
+
 		nvrhi::BindingSetDesc postSetDesc;
 		postSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_HdrColor));
 		postSetDesc.addItem(nvrhi::BindingSetItem::Sampler(1, m_HdrSampler));
+		postSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(2, m_BloomTextureA));
+		postSetDesc.addItem(nvrhi::BindingSetItem::Sampler(3, m_HdrSampler));
 		m_PostBindingSet = m_Device->createBindingSet(postSetDesc, m_PostBindingLayout);
 
 		if (m_SceneFramebuffer == nullptr || m_PostFramebuffer == nullptr || m_PostBindingSet == nullptr)
@@ -855,6 +951,13 @@ namespace aegis
 			m_SsaoBindingSet == nullptr || m_BlurBindingSet == nullptr || m_FrameBindingSet == nullptr)
 		{
 			AE_CORE_CRITICAL("Could not create the SSAO resources at {}x{}", aoWidth, aoHeight);
+			return false;
+		}
+		if (m_BloomTextureA == nullptr || m_BloomTextureB == nullptr || m_BloomFramebufferA == nullptr ||
+			m_BloomFramebufferB == nullptr || m_BloomPrefilterBindingSet == nullptr ||
+			m_BloomBlurBindingSetA == nullptr || m_BloomBlurBindingSetB == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the bloom resources at {}x{}", bloomWidth, bloomHeight);
 			return false;
 		}
 		return true;
@@ -1328,6 +1431,48 @@ namespace aegis
 		commandList->endMarker();
 	}
 
+	void SceneRenderer::recordBloomPasses(nvrhi::ICommandList* commandList)
+	{
+		const nvrhi::TextureDesc bloomDesc = m_BloomTextureA->getDesc();
+		const f32 bloomWidth = static_cast<f32>(bloomDesc.width);
+		const f32 bloomHeight = static_cast<f32>(bloomDesc.height);
+		SceneBlurConstants constants;
+
+		// Bright pass, 2x2 downsample into bloom A.
+		commandList->beginMarker("Bloom prefilter");
+		nvrhi::GraphicsState state;
+		state.pipeline = m_BloomPrefilterPipeline;
+		state.framebuffer = m_BloomFramebufferA;
+		state.bindings = { m_BloomPrefilterBindingSet };
+		state.setViewport(FullViewport(bloomWidth, bloomHeight));
+		commandList->setGraphicsState(state);
+		constants.TexelSize = glm::vec4(m_BloomParams.y, 1.0f / static_cast<f32>(m_Width),
+			1.0f / static_cast<f32>(m_Height), 0.0f);
+		commandList->setPushConstants(&constants, sizeof(constants));
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		commandList->endMarker();
+
+		// Horizontal blur: A -> B.
+		commandList->beginMarker("Bloom blur H");
+		state.framebuffer = m_BloomFramebufferB;
+		state.bindings = { m_BloomBlurBindingSetA };
+		commandList->setGraphicsState(state);
+		constants.TexelSize = glm::vec4(1.0f / bloomWidth, 1.0f / bloomHeight, 1.0f, 0.0f);
+		commandList->setPushConstants(&constants, sizeof(constants));
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		commandList->endMarker();
+
+		// Vertical blur: B -> A, which the tonemap pass samples.
+		commandList->beginMarker("Bloom blur V");
+		state.framebuffer = m_BloomFramebufferA;
+		state.bindings = { m_BloomBlurBindingSetB };
+		commandList->setGraphicsState(state);
+		constants.TexelSize = glm::vec4(1.0f / bloomWidth, 1.0f / bloomHeight, 0.0f, 1.0f);
+		commandList->setPushConstants(&constants, sizeof(constants));
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		commandList->endMarker();
+	}
+
 	void SceneRenderer::recordSkyPass(nvrhi::ICommandList* commandList)
 	{
 		commandList->beginMarker("Sky");
@@ -1394,6 +1539,7 @@ namespace aegis
 
 		ScenePostConstants postConstants;
 		postConstants.PostProcess = m_FrameConstants.PostProcess;
+		postConstants.Bloom = m_BloomParams;
 		commandList->setPushConstants(&postConstants, sizeof(postConstants));
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 		commandList->endMarker();
@@ -1412,6 +1558,12 @@ namespace aegis
 		m_SsaoActive = environment.EnableSSAO && m_PrepassPipeline != nullptr && m_SsaoPipeline != nullptr &&
 					   m_SsaoBlurPipeline != nullptr && m_AoFramebuffer != nullptr && m_AoBlurFramebuffer != nullptr &&
 					   m_SsaoBindingSet != nullptr && m_BlurBindingSet != nullptr && m_PrepassFramebuffer != nullptr;
+		m_BloomActive = environment.EnableBloom && m_BloomPrefilterPipeline != nullptr &&
+						m_BloomBlurPipeline != nullptr && m_BloomPrefilterBindingSet != nullptr &&
+						m_BloomBlurBindingSetA != nullptr && m_BloomBlurBindingSetB != nullptr &&
+						m_BloomFramebufferA != nullptr && m_BloomFramebufferB != nullptr;
+		m_BloomParams = glm::vec4(Max(environment.BloomIntensity, 0.0f), Max(environment.BloomThreshold, 0.0f),
+			m_BloomActive ? 1.0f : 0.0f, 0.0f);
 		updateEnvironment(scene, commandList);
 		gatherDrawItems(scene, cameraPosition);
 		fillFrameConstants(scene, viewProjection, cameraPosition, lightViewProjection, renderShadows);
@@ -1438,6 +1590,10 @@ namespace aegis
 		}
 
 		recordForwardPass(commandList);
+		if (m_BloomActive)
+		{
+			recordBloomPasses(commandList);
+		}
 		recordPostPass(commandList);
 	}
 

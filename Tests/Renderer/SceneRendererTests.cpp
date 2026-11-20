@@ -629,3 +629,99 @@ TEST_CASE("SceneRenderer: SSAO darkens the frame and can be toggled at runtime")
 
 	renderer.Shutdown();
 }
+
+TEST_CASE("SceneRenderer: bloom adds energy and can be toggled at runtime")
+{
+	HeadlessDevice device;
+	if (!CreateHeadlessDevice(device))
+	{
+		AE_CORE_WARN("Vulkan 1.3 is unavailable on this machine: skipping the bloom GPU test");
+		return;
+	}
+
+	constexpr u32 c_Size = 64;
+	SceneRenderer renderer;
+	REQUIRE(renderer.Initialize(device.Nvrhi.Get()));
+	renderer.Resize(c_Size, c_Size);
+
+	// A large bright floor under a strong sun gives the bright pass plenty of
+	// energy in the centre of the frame.
+	Scene scene("bloom");
+	AssetCache& cache = renderer.GetAssetCache();
+	const Uuid materialId = Uuid::Generate();
+	MaterialFactors factors;
+	factors.BaseColorFactor = glm::vec4(1.0f);
+	factors.RoughnessFactor = 1.0f;
+	factors.MetallicFactor = 0.0f;
+	REQUIRE_FALSE(cache.AddMaterial(materialId, factors, MaterialTextures{}, "bloom white").IsNull());
+
+	Entity floor = scene.CreateEntity("Floor");
+	MeshRendererComponent floorRenderer;
+	floorRenderer.Mesh = cache.GetBuiltinMesh(PrimitiveType::Plane);
+	floorRenderer.CastShadows = false;
+	floorRenderer.Materials.push_back(AssetHandle{ materialId, AssetType::Material });
+	floor.AddComponent<MeshRendererComponent>(floorRenderer);
+	floor.GetComponent<TransformComponent>().LocalScale = glm::vec3(12.0f, 1.0f, 12.0f);
+
+	Entity sun = scene.CreateEntity("Sun");
+	LightComponent light;
+	light.Type = LightType::Directional;
+	light.Intensity = 6.0f;
+	sun.AddComponent<LightComponent>(light);
+	sun.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(-70.0f, 0.0f, 0.0f));
+	scene.UpdateTransforms();
+
+	const glm::vec3 cameraPosition(0.0f, 2.5f, 4.0f);
+	const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+	const glm::mat4 projection = glm::perspective(glm::radians(55.0f), 1.0f, 0.1f, 100.0f);
+	const glm::mat4 lightViewProjection = SceneRenderer::ComputeDirectionalShadowMatrix(scene, cameraPosition, 20.0f);
+
+	const auto renderBrightness = [&]()
+	{
+		nvrhi::CommandListHandle commandList = device.Nvrhi->createCommandList();
+		commandList->open();
+		renderer.Render(commandList, scene, projection * view, cameraPosition, lightViewProjection, false);
+		commandList->close();
+		nvrhi::ICommandList* rawList = commandList;
+		device.Nvrhi->executeCommandLists(&rawList, 1);
+		device.Nvrhi->waitForIdle();
+
+		u32 width = 0;
+		u32 height = 0;
+		const std::vector<u8> pixels = ReadBackTexture(device.Nvrhi.Get(), renderer.GetFinalColor(), width, height);
+		REQUIRE(width == c_Size);
+		REQUIRE(height == c_Size);
+		REQUIRE(pixels.size() == static_cast<usize>(c_Size) * c_Size * 4);
+		f64 luminance = 0.0;
+		for (usize i = 0; i < pixels.size(); i += 4)
+		{
+			luminance += 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+		}
+		return luminance / static_cast<f64>(c_Size * c_Size);
+	};
+
+	// One warm-up frame uploads the environment map, so the measured frames are
+	// not affected by first-use IBL upload state.
+	renderBrightness();
+
+	scene.GetEnvironment().EnableBloom = false;
+	const f64 withoutBloom = renderBrightness();
+	CHECK_FALSE(renderer.IsBloomActive());
+	CHECK(withoutBloom > 20.0);
+
+	scene.GetEnvironment().EnableBloom = true;
+	scene.GetEnvironment().BloomThreshold = 0.4f;
+	scene.GetEnvironment().BloomIntensity = 2.0f;
+	const f64 withBloom = renderBrightness();
+	CHECK(renderer.IsBloomActive());
+	CHECK(withBloom > withoutBloom + 0.5);
+
+	// Disabling restores the previous image exactly: the chain leaves no stale
+	// energy behind and the tonemap stops compositing the bloom texture.
+	scene.GetEnvironment().EnableBloom = false;
+	const f64 reDisabled = renderBrightness();
+	CHECK_FALSE(renderer.IsBloomActive());
+	CHECK(reDisabled == doctest::Approx(withoutBloom).epsilon(0.001));
+
+	renderer.Shutdown();
+}

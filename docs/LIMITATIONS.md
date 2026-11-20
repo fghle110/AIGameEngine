@@ -16,10 +16,11 @@ is listed, the engine either ignores the corresponding setting or does not expos
   `SSAORadius` drive a 16-sample hemisphere kernel plus a 9x9 blur, and it multiplies only
   the ambient term. It has no bilateral depth-aware blur, no temporal accumulation and no
   denoise, so thin geometry can show halo noise; `EnableFXAA` is still ignored.
-- **No bloom.** `EnvironmentSettings.EnableBloom`, `BloomThreshold` and `BloomIntensity`
-  are serialised but ignored. The post pass currently does exposure and ACES only; a bloom
-  chain (bright pass, downsample, separable blur, additive composite) would slot in between
-  the HDR target and the tonemap.
+- **Bloom is a single-level, half-resolution chain.** `EnableBloom`, `BloomThreshold` and
+  `BloomIntensity` drive a soft-knee bright pass, one horizontal and one vertical 9-tap
+  gaussian and an additive composite before exposure. There is no multi-mip pyramid, no
+  lens dirt/anamorphic streak and no temporal jitter, so very bright highlights bloom with a
+  fixed radius.
 - **No anti-aliasing.** No MSAA on the scene targets and no FXAA or TAA pass.
 - **Single shadow map, no cascades.** The sun uses one 2048x2048 map fitted to a box around
   the camera (`SceneRenderer::ComputeDirectionalShadowMatrix`). Distant shadows lose

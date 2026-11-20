@@ -13,9 +13,9 @@ Aegis is a production-oriented 3D game engine for Windows, macOS and Linux (Ubun
 - Versioned JSON scene/prefab serialisation, project manifests, export pipeline (`AegisCli export`)
 - NVRHI Vulkan renderer: forward Cook-Torrance PBR, normal mapping, 2048² PCF shadow map,
   procedural sky or HDRI image-based lighting (irradiance/specular/BRDF prefiltered),
-  depth-prepass SSAO, HDR → ACES tonemapping; glTF/GLB import with materials and textures
+  depth-prepass SSAO, bloom, HDR → ACES tonemapping; glTF/GLB import with materials and textures
 - Physics (Jolt), 3D audio (miniaudio), Lua scripting with per-entity instances and hot reload
-- 175 doctest cases / 6808 assertions plus a feature project that exercises every component
+- 176 doctest cases / 6828 assertions plus a feature project that exercises every component
 - See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for the honest list of what is still missing
 
 ## Build

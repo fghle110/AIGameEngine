@@ -60,6 +60,8 @@ namespace aegis
 	struct ScenePostConstants
 	{
 		glm::vec4 PostProcess{ 1.0f };
+		// x = bloom intensity, y = threshold, z = bloom active, w = unused
+		glm::vec4 Bloom{ 0.0f };
 	};
 
 	// Push constant block of the SSAO pass: x = radius, y = bias, z = strength, w = unused.
@@ -77,7 +79,7 @@ namespace aegis
 	static_assert(sizeof(SceneLightConstants) == 64, "SceneLightConstants must match the std140 layout");
 	static_assert(sizeof(SceneObjectConstants) == 112, "SceneObjectConstants must match the std140 layout");
 	static_assert(sizeof(SceneFrameConstants) == 816, "SceneFrameConstants must match the std140 layout");
-	static_assert(sizeof(ScenePostConstants) == 16, "ScenePostConstants must match the std140 layout");
+	static_assert(sizeof(ScenePostConstants) == 32, "ScenePostConstants must match the std140 layout");
 	static_assert(sizeof(SceneSsaoConstants) == 16, "SceneSsaoConstants must match the std140 layout");
 	static_assert(sizeof(SceneBlurConstants) == 16, "SceneBlurConstants must match the std140 layout");
 
@@ -125,6 +127,7 @@ namespace aegis
 		// Image-based lighting state for the current environment.
 		bool IsEnvironmentActive() const { return m_EnvironmentActive; }
 		bool IsSsaoActive() const { return m_SsaoActive; }
+		bool IsBloomActive() const { return m_BloomActive; }
 		u32 GetEnvironmentMipCount() const { return m_EnvironmentMap.SpecularMipCount; }
 		const EnvironmentMap& GetEnvironmentMap() const { return m_EnvironmentMap; }
 		const SceneRendererStats& GetStats() const { return m_Stats; }
@@ -159,6 +162,7 @@ namespace aegis
 		void recordDepthPrepass(nvrhi::ICommandList* commandList);
 		void recordSsaoPass(nvrhi::ICommandList* commandList);
 		void recordSsaoBlur(nvrhi::ICommandList* commandList);
+		void recordBloomPasses(nvrhi::ICommandList* commandList);
 		nvrhi::TextureHandle createCubeTexture(u32 size, u32 mips, const std::string& debugName);
 		void uploadEnvironment(const EnvironmentMap& environment, nvrhi::ICommandList* commandList);
 		void rebuildFrameBindingSet();
@@ -189,6 +193,8 @@ namespace aegis
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SsaoPixelShader;
 		nvrhi::ShaderHandle m_SsaoBlurPixelShader;
+		nvrhi::ShaderHandle m_BloomPrefilterPixelShader;
+		nvrhi::ShaderHandle m_BloomBlurPixelShader;
 		nvrhi::ShaderHandle m_SkyPixelShader;
 
 		nvrhi::InputLayoutHandle m_SceneInputLayout;
@@ -200,6 +206,8 @@ namespace aegis
 		nvrhi::GraphicsPipelineHandle m_PrepassPipeline;
 		nvrhi::GraphicsPipelineHandle m_SsaoPipeline;
 		nvrhi::GraphicsPipelineHandle m_SsaoBlurPipeline;
+		nvrhi::GraphicsPipelineHandle m_BloomPrefilterPipeline;
+		nvrhi::GraphicsPipelineHandle m_BloomBlurPipeline;
 		nvrhi::GraphicsPipelineHandle m_SkyPipeline;
 
 		nvrhi::SamplerHandle m_ShadowSampler;
@@ -223,6 +231,9 @@ namespace aegis
 		nvrhi::BindingSetHandle m_CameraDepthBindingSet;
 		nvrhi::BindingSetHandle m_SsaoBindingSet;
 		nvrhi::BindingSetHandle m_BlurBindingSet;
+		nvrhi::BindingSetHandle m_BloomPrefilterBindingSet;
+		nvrhi::BindingSetHandle m_BloomBlurBindingSetA;
+		nvrhi::BindingSetHandle m_BloomBlurBindingSetB;
 		nvrhi::BindingSetHandle m_PostBindingSet;
 
 		nvrhi::TextureHandle m_HdrColor;
@@ -230,6 +241,8 @@ namespace aegis
 		nvrhi::TextureHandle m_AoTexture;
 		nvrhi::TextureHandle m_AoBlurTexture;
 		nvrhi::TextureHandle m_AoFallback;
+		nvrhi::TextureHandle m_BloomTextureA;
+		nvrhi::TextureHandle m_BloomTextureB;
 		nvrhi::TextureHandle m_FinalColor;
 		nvrhi::TextureHandle m_ShadowMap;
 
@@ -239,6 +252,8 @@ namespace aegis
 		nvrhi::FramebufferHandle m_PrepassFramebuffer;
 		nvrhi::FramebufferHandle m_AoFramebuffer;
 		nvrhi::FramebufferHandle m_AoBlurFramebuffer;
+		nvrhi::FramebufferHandle m_BloomFramebufferA;
+		nvrhi::FramebufferHandle m_BloomFramebufferB;
 
 		std::vector<DrawItem> m_DrawItems;
 		// Entity names already reported for a missing mesh, so the warning appears once.
@@ -250,6 +265,8 @@ namespace aegis
 		u32 m_Width = 1;
 		u32 m_Height = 1;
 		bool m_SsaoActive = false;
+		bool m_BloomActive = false;
+		glm::vec4 m_BloomParams{ 0.0f };
 		bool m_Initialized = false;
 	};
 }
