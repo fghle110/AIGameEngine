@@ -1,18 +1,20 @@
 #pragma once
 
 #include "Aegis/Core/Application.h"
+#include "RuntimeLayer.h"
 
-#include <string>
+#include <filesystem>
 
 namespace aegis
 {
 	class RuntimeApp final : public Application
 	{
 	public:
-		explicit RuntimeApp(std::string projectPath);
+		explicit RuntimeApp(std::filesystem::path projectFile, RuntimeAutomationOptions automation = {});
 		~RuntimeApp() override;
 
 	private:
-		std::string m_ProjectPath;
+		RuntimeLayer* m_RuntimeLayer = nullptr;
+		std::filesystem::path m_ProjectFile;
 	};
 }

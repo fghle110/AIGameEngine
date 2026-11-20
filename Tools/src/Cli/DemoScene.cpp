@@ -115,6 +115,7 @@ namespace aegis::demo
 		cubeCollider.HalfExtents = glm::vec3(0.5f);
 		fallingCube.AddComponent<ColliderComponent>(cubeCollider);
 		LuaScriptComponent cubeScript;
+		cubeScript.Script.Id = Uuid::Generate();
 		cubeScript.Script.Type = AssetType::Script;
 		JsonValue properties = JsonValue::MakeObject();
 		properties.Set("speed", 45.0);
@@ -190,7 +191,11 @@ namespace aegis::demo
 			"function OnDestroy(self)\n"
 			"    engine.log.info('Spinner destroyed on ' .. self:name())\n"
 			"end\n";
-		if (!FileSystem::WriteTextFile(projectDirectory / "Scripts" / "Spinner.lua", spinnerScript))
+		// LuaEngine resolves a script without an explicit registration from
+		// <scriptRoot>/<asset uuid>.lua, so the feature project uses that convention.
+		const auto scriptName = cubeScript.Script.Id.ToString() + ".lua";
+		if (!FileSystem::WriteTextFile(projectDirectory / "Scripts" / scriptName, spinnerScript) ||
+			!FileSystem::WriteTextFile(projectDirectory / "Scripts" / "Spinner.lua", spinnerScript))
 		{
 			return error("Could not write the Spinner script");
 		}

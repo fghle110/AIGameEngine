@@ -52,7 +52,7 @@
                     1
                 ]
             },
-            "uuid": "c52e1c1f-0569-46dd-89d9-1dd2c7fb5685"
+            "uuid": "0140dfcf-4a9e-4015-b0df-09c68e5e877c"
         },
         {
             "active": true,
@@ -90,7 +90,7 @@
                     1
                 ]
             },
-            "uuid": "90df7393-e63d-4350-a1d9-1010c478f2f9"
+            "uuid": "a5eac54e-34d0-4cb7-928c-d0c62e18bf70"
         },
         {
             "active": true,
@@ -128,7 +128,7 @@
                     1
                 ]
             },
-            "uuid": "8dd641d8-1d03-488e-8663-03c127802975"
+            "uuid": "470ecc96-b01f-4cb0-9bcd-6dc01b4f7af3"
         },
         {
             "active": true,
@@ -166,7 +166,7 @@
                     1
                 ]
             },
-            "uuid": "3d592fb5-1183-46e0-854e-be37b2833563"
+            "uuid": "49819ac4-5be0-4c85-9c09-bcbd5838e4f4"
         },
         {
             "active": true,
@@ -226,7 +226,7 @@
                     30
                 ]
             },
-            "uuid": "6d9f2192-6e11-4208-8f81-644f7d9bd37e"
+            "uuid": "fe7604a8-125f-4d58-a6b9-913b4221790a"
         },
         {
             "active": true,
@@ -253,7 +253,7 @@
                     "speed": 45
                 },
                 "script": {
-                    "id": null,
+                    "id": "b866f36e-64be-4357-987d-def5e8609b67",
                     "type": "script"
                 }
             },
@@ -297,7 +297,7 @@
                     1
                 ]
             },
-            "uuid": "7ae9cbee-2f31-47a9-ab8c-ccb2b6caedc7"
+            "uuid": "ce2ebbbb-4a24-428c-b639-aea074bdeeeb"
         },
         {
             "active": true,
@@ -357,14 +357,14 @@
                     1
                 ]
             },
-            "uuid": "1de423fd-1f50-46e9-b40f-1941a45137b6"
+            "uuid": "0603bbbe-c3b6-4d3c-a505-3af9b3af88c9"
         },
         {
             "active": true,
             "name": "Camera Rig",
             "transform": {
                 "children": [
-                    "fe929b31-f16c-4d3b-9887-9ab2077aa760"
+                    "1d2005dd-c21b-42f9-a486-47a52c1af74f"
                 ],
                 "parent": null,
                 "position": [
@@ -384,7 +384,7 @@
                     1
                 ]
             },
-            "uuid": "f8f4a661-952b-4162-9e9f-a62f75b30471"
+            "uuid": "426ef0a8-83b7-44bb-b66e-bd8c1fd1cb32"
         },
         {
             "active": true,
@@ -401,7 +401,7 @@
             "name": "Rig Child",
             "transform": {
                 "children": [],
-                "parent": "f8f4a661-952b-4162-9e9f-a62f75b30471",
+                "parent": "426ef0a8-83b7-44bb-b66e-bd8c1fd1cb32",
                 "position": [
                     2.718923330307007,
                     2,
@@ -419,7 +419,7 @@
                     1
                 ]
             },
-            "uuid": "fe929b31-f16c-4d3b-9887-9ab2077aa760"
+            "uuid": "1d2005dd-c21b-42f9-a486-47a52c1af74f"
         },
         {
             "active": true,
@@ -457,7 +457,7 @@
                     1
                 ]
             },
-            "uuid": "4e22a42d-bfd3-472e-bf1e-ed7fc1875257"
+            "uuid": "2a4ccbfb-136b-4ead-9e17-626741d39cab"
         },
         {
             "active": true,
@@ -517,7 +517,7 @@
                     1
                 ]
             },
-            "uuid": "68120433-9865-4885-8f75-af4a178b57c3"
+            "uuid": "9a676776-8543-4d64-b461-13177168ecea"
         }
     ],
     "scene": {
@@ -542,7 +542,7 @@
             "ssaoRadius": 0.6000000238418579
         },
         "name": "Feature Test",
-        "uuid": "eea21197-ccc6-413d-9ef8-96368b1c0cbf"
+        "uuid": "d7d47501-dd1e-4254-9176-3511ae8fbb26"
     },
     "version": 1
 }
