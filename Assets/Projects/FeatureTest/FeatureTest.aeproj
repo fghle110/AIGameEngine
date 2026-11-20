@@ -1,0 +1,9 @@
+{
+    "name": "FeatureTest",
+    "startScene": "Scenes/FeatureTest.aescene",
+    "version": 1,
+    "vsync": true,
+    "windowHeight": 900,
+    "windowTitle": "Aegis Feature Test",
+    "windowWidth": 1600
+}

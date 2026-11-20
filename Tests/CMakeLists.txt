@@ -17,6 +17,8 @@ set_target_properties(AegisTests PROPERTIES FOLDER "Tests")
 target_include_directories(AegisTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(AegisTests PRIVATE Aegis doctest::doctest)
 target_compile_definitions(AegisTests PRIVATE DOCTEST_CONFIG_NO_MULTITHREADING=1)
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" AE_TEST_SOURCE_PATH)
+target_compile_definitions(AegisTests PRIVATE AE_TEST_SOURCE_DIR="${AE_TEST_SOURCE_PATH}")
 ae_copy_shaders(AegisTests)
 
 ae_apply_warnings(AegisTests)
