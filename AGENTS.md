@@ -143,11 +143,12 @@ Additional rules:
 - Colour pipeline: render in linear space to an HDR target (RGBA16F), apply
   exposure, bloom and ACES tonemapping in the post process, then output in
   display space. Never tone-map twice.
-- Shadow maps use cascaded shadow maps (CSM) with PCF; keep cascade splits in
-  the frame constants so the editor can visualize them.
-- IBL: an equirectangular HDR is prefiltered at load time into irradiance and
-  prefiltered specular cubes plus a BRDF LUT. Cache the result next to the
-  source file under `Saved/Cache/IBL/`.
+- Shadow maps: one 2048² PCF map fitted around the camera today; cascaded
+  shadow maps with splits in the frame constants are the target design (see
+  `docs/LIMITATIONS.md`).
+- IBL: an equirectangular HDR (or the procedural sky) is prefiltered into an
+  irradiance cube, a GGX specular mip chain and a BRDF LUT. The prefilter runs
+  once per environment change; a `Saved/Cache/IBL/` disk cache is the target.
 - Every render feature must be switchable at runtime through the render
   settings (used by the editor and by automated tests).
 
