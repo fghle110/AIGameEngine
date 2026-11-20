@@ -151,8 +151,57 @@ set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(SKIP_GLSLANG_INSTALL ON CACHE BOOL "" FORCE)
 set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# glslang's standalone validator generates its intrinsic header with Python. The
+# FindPython3 imported target only declares the standard configurations, which
+# breaks generation for the custom "Dist" configuration. Declare a global,
+# configuration-independent interpreter target first so FindPython3 reuses it.
+if(NOT TARGET Python3::Interpreter)
+    # The plain "python" name may be missing while the Windows launcher (py.exe)
+    # exists, so resolve the real interpreter through whichever launcher is found.
+    find_program(AE_PYTHON3_LAUNCHER NAMES python3 python py)
+    set(_aegis_python_ok FALSE)
+    if(AE_PYTHON3_LAUNCHER)
+        execute_process(COMMAND "${AE_PYTHON3_LAUNCHER}" -c "import sys; print(sys.executable)"
+            OUTPUT_VARIABLE _aegis_python_path
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _aegis_python_result
+            ERROR_QUIET)
+        if(_aegis_python_result EQUAL 0 AND EXISTS "${_aegis_python_path}")
+            set(_aegis_python_ok TRUE)
+        endif()
+    endif()
+    if(_aegis_python_ok)
+        add_executable(Python3::Interpreter IMPORTED GLOBAL)
+        set_target_properties(Python3::Interpreter PROPERTIES
+            IMPORTED_LOCATION "${_aegis_python_path}")
+        # MAP_IMPORTED_CONFIG_DIST makes CMake resolve the Dist configuration
+        # through a mapped standard one, so every mapped location must exist.
+        foreach(_aegis_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+            set_property(TARGET Python3::Interpreter PROPERTY IMPORTED_LOCATION_${_aegis_config}
+                "${_aegis_python_path}")
+        endforeach()
+        message(STATUS "Aegis: using ${_aegis_python_path} for glslang source generation")
+    else()
+        message(FATAL_ERROR "Aegis: no working Python 3 interpreter found; glslang needs one to generate its intrinsic header")
+    endif()
+endif()
+
 ae_dep_git(glslang https://github.com/KhronosGroup/glslang.git 15.4.0)
 FetchContent_MakeAvailable(glslang)
+
+# FindPython3 may only add per-configuration locations when it finds Python
+# itself. Our global target carries a single location; keep it authoritative for
+# every configuration (including the custom Dist one) by dropping the
+# configuration list after glslang has configured.
+if(TARGET Python3::Interpreter AND _aegis_python_ok)
+    set_property(TARGET Python3::Interpreter PROPERTY IMPORTED_LOCATION "${_aegis_python_path}")
+    set_property(TARGET Python3::Interpreter PROPERTY IMPORTED_CONFIGURATIONS "")
+    foreach(_aegis_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_property(TARGET Python3::Interpreter PROPERTY IMPORTED_LOCATION_${_aegis_config}
+            "${_aegis_python_path}")
+    endforeach()
+endif()
+
 
 if(TARGET glslang-standalone)
     set(AE_GLSLANG_VALIDATOR glslang-standalone CACHE STRING "glslang validator target" FORCE)
