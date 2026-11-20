@@ -38,8 +38,14 @@ TEST_CASE("Camera: perspective projection maps near/far to Vulkan depth range")
 
 	TransformComponent transform;
 	const glm::mat4 viewProjection = viewport.ComputeViewProjection(transform, camera);
-	// Vulkan flips Y and uses [0,1] depth: the projection's [1][1] entry is negated.
-	CHECK(viewProjection[1][1] == doctest::Approx(-projection[1][1]));
+	// The renderer consumes the projection unchanged; the depth range is [0, 1].
+	CHECK(viewProjection[1][1] == doctest::Approx(projection[1][1]));
+
+	const glm::mat4 zeroToOne = Camera::ComputeProjection(camera, viewport.GetAspectRatio());
+	const glm::vec4 nearPoint = zeroToOne * glm::vec4(0.0f, 0.0f, -camera.NearClip, 1.0f);
+	const glm::vec4 farPoint = zeroToOne * glm::vec4(0.0f, 0.0f, -camera.FarClip, 1.0f);
+	CHECK(nearPoint.z / nearPoint.w == doctest::Approx(0.0f).epsilon(0.001));
+	CHECK(farPoint.z / farPoint.w == doctest::Approx(1.0f).epsilon(0.001));
 }
 
 TEST_CASE("Camera: orthographic projection matches the configured size")

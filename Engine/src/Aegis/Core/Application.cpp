@@ -1,6 +1,7 @@
 #include "Aegis/Core/Application.h"
 
 #include "Aegis/Core/Config.h"
+#include "Aegis/Core/CrashHandler.h"
 #include "Aegis/Core/FileSystem.h"
 #include "Aegis/Core/Layer.h"
 #include "Aegis/Core/Log.h"
@@ -22,6 +23,7 @@ namespace aegis
 		AE_ASSERT(s_Application == nullptr, "Only one Application may exist per process");
 		s_Application = this;
 
+		InstallCrashHandler();
 		Log::Init("logs");
 
 		if (!m_Specification.WorkingDirectory.empty())

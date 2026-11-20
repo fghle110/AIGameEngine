@@ -141,10 +141,9 @@ namespace aegis
 					std::fprintf(stream, "%s %-8s [%s] %s\n", message.Timestamp.c_str(),
 						LogLevelToString(message.Level).data(), message.Logger.c_str(), message.Message.c_str());
 				}
-				if (message.Level >= LogLevel::Warn)
-				{
-					std::fflush(stream);
-				}
+				// Flushing every line keeps logs of a crash complete; console
+				// throughput is not a bottleneck compared to rendering.
+				std::fflush(stream);
 			}
 
 			void Flush() override
@@ -178,10 +177,7 @@ namespace aegis
 				}
 				m_Stream << message.Timestamp << " " << LogLevelToString(message.Level) << " [" << message.Logger << "] "
 						 << message.Message << '\n';
-				if (message.Level >= LogLevel::Warn)
-				{
-					m_Stream.flush();
-				}
+				m_Stream.flush();
 			}
 
 			void Flush() override

@@ -5,7 +5,7 @@
 
 namespace aegis
 {
-	EditorApp::EditorApp()
+	EditorApp::EditorApp(const EditorAutomationOptions& automation)
 		: Application([] {
 			ApplicationSpecification specification;
 			specification.Name = std::string(c_EditorName);
@@ -14,12 +14,16 @@ namespace aegis
 			specification.VSync = true;
 			return specification;
 		}())
+		, m_Automation(automation)
 	{
+		m_EditorLayer = new EditorLayer(m_Automation);
+		PushLayer(m_EditorLayer);
 		AE_CORE_INFO("{} started", c_EditorName);
 	}
 
 	EditorApp::~EditorApp()
 	{
+		m_EditorLayer = nullptr;
 		AE_CORE_INFO("{} stopped", c_EditorName);
 	}
 

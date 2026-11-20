@@ -51,6 +51,8 @@ namespace aegis
 		Scene& operator=(const Scene&) = delete;
 
 		const Uuid& GetUuid() const { return m_Uuid; }
+		// Loading a persisted scene restores its identity; new scenes generate one.
+		void SetUuid(const Uuid& uuid) { m_Uuid = uuid; }
 		const std::string& GetName() const { return m_Name; }
 		void SetName(std::string name) { m_Name = std::move(name); }
 

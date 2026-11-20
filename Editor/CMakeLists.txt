@@ -24,4 +24,5 @@ set_target_properties(AegisEditorExe PROPERTIES
     FOLDER "Editor"
     OUTPUT_NAME "AegisEditor")
 target_link_libraries(AegisEditorExe PRIVATE AegisEditor)
+ae_copy_shaders(AegisEditorExe)
 ae_apply_warnings(AegisEditorExe)

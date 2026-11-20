@@ -22,7 +22,8 @@ param(
     [switch]$Clean,
     [switch]$Test,
     [switch]$NoConfigure,
-    [string]$BuildDirectory = ''
+    [string]$BuildDirectory = '',
+    [string]$CMakeArgs = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,6 +100,10 @@ try
     {
         Write-Host "Configuring $Configuration -> $BuildDirectory" -ForegroundColor Cyan
         $configureArgs = @('-S', $root, '-B', $BuildDirectory, '-G', 'Ninja', ('-DCMAKE_BUILD_TYPE=' + $Configuration))
+        if ($CMakeArgs)
+        {
+            $configureArgs += $CMakeArgs.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+        }
         & $cmake @configureArgs
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)." }
     }

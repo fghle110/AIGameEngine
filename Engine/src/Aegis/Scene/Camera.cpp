@@ -39,10 +39,10 @@ namespace aegis
 
 	glm::mat4 Camera::ComputeViewProjection(const TransformComponent& transform, const CameraComponent& camera) const
 	{
-		// Vulkan clip space: Y points down, depth range is [0, 1].
-		glm::mat4 projection = ComputeProjection(camera, GetAspectRatio());
-		projection[1][1] *= -1.0f;
-		return projection * ComputeView(transform);
+		// NVRHI's Vulkan backend uses a DX-style viewport, so the standard
+		// right-handed projection is used unchanged; GLM_FORCE_DEPTH_ZERO_TO_ONE
+		// already gives the [0, 1] depth range the API needs.
+		return ComputeProjection(camera, GetAspectRatio()) * ComputeView(transform);
 	}
 
 	void Camera::ComputeRay(const TransformComponent& transform, const CameraComponent& camera, f32 aspectRatio,

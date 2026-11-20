@@ -54,9 +54,18 @@ option(AE_BUILD_EDITOR "Build the Aegis editor" ON)
 option(AE_BUILD_RUNTIME "Build the Aegis runtime (game player)" ON)
 option(AE_BUILD_TOOLS "Build Aegis command line tools" ON)
 option(AE_VERBOSE_DEPENDENCIES "Show dependency fetch output" OFF)
+# Development helper: comma-separated engine/tests module folders to leave out of
+# this build tree (for example Serialization while an agent rewrites it). Shipping
+# builds must leave this empty; CI enforces that in Scripts/Verify.ps1.
+set(AE_EXCLUDE_MODULES "" CACHE STRING "Comma-separated module folders excluded from this build")
 
 if(AE_WARNINGS_AS_ERRORS)
     add_compile_definitions(AE_WARNINGS_AS_ERRORS=1)
+endif()
+
+if(AE_EXCLUDE_MODULES)
+    string(REPLACE "," ";" AE_EXCLUDE_MODULES "${AE_EXCLUDE_MODULES}")
+    message(STATUS "Aegis: excluding modules from this build: ${AE_EXCLUDE_MODULES}")
 endif()
 
 # ---------------------------------------------------------------------------

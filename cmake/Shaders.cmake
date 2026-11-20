@@ -19,13 +19,13 @@ function(ae_add_shaders target)
     set(_outputs)
 
     foreach(_file IN LISTS ARG_FILES)
-        get_filename_component(_name "${_file}" NAME_WE)
+        get_filename_component(_name "${_file}" NAME)
         set(_source "${AE_SHADER_SOURCE_DIR}/${_file}")
         set(_output "${_output_dir}/${_name}.spv")
         add_custom_command(
             OUTPUT "${_output}"
             COMMAND ${AE_GLSLANG_VALIDATOR_EXECUTABLE} -V --target-env vulkan1.2
-                    -I "${AE_SHADER_SOURCE_DIR}" "${_source}" -o "${_output}"
+                    "-I${AE_SHADER_SOURCE_DIR}" "${_source}" -o "${_output}"
             DEPENDS "${_source}"
             COMMENT "Compiling shader ${_file}"
             VERBATIM)
@@ -34,8 +34,16 @@ function(ae_add_shaders target)
 
     add_custom_target(${target}_shaders DEPENDS ${_outputs})
     add_dependencies(${target} ${target}_shaders)
+    set(AE_SHADER_OUTPUT_DIR "${_output_dir}" CACHE INTERNAL "Directory holding compiled shaders")
+endfunction()
 
+# Copies the compiled shaders next to an executable. Static libraries have no
+# POST_BUILD step, so every executable that loads shaders calls this.
+function(ae_copy_shaders target)
+    if(NOT AE_SHADER_OUTPUT_DIR)
+        return()
+    endif()
     add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${_output_dir}" "$<TARGET_FILE_DIR:${target}>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${AE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:${target}>/shaders"
         COMMENT "Copying compiled shaders for ${target}")
 endfunction()
