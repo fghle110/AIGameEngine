@@ -62,10 +62,24 @@ namespace aegis
 		glm::vec4 PostProcess{ 1.0f };
 	};
 
+	// Push constant block of the SSAO pass: x = radius, y = bias, z = strength, w = unused.
+	struct SceneSsaoConstants
+	{
+		glm::vec4 Params{ 0.6f, 0.025f, 1.0f, 0.0f };
+	};
+
+	// Push constant block of the SSAO blur pass: xy = source texel size.
+	struct SceneBlurConstants
+	{
+		glm::vec4 TexelSize{ 0.0f };
+	};
+
 	static_assert(sizeof(SceneLightConstants) == 64, "SceneLightConstants must match the std140 layout");
 	static_assert(sizeof(SceneObjectConstants) == 112, "SceneObjectConstants must match the std140 layout");
 	static_assert(sizeof(SceneFrameConstants) == 816, "SceneFrameConstants must match the std140 layout");
 	static_assert(sizeof(ScenePostConstants) == 16, "ScenePostConstants must match the std140 layout");
+	static_assert(sizeof(SceneSsaoConstants) == 16, "SceneSsaoConstants must match the std140 layout");
+	static_assert(sizeof(SceneBlurConstants) == 16, "SceneBlurConstants must match the std140 layout");
 
 	struct SceneRendererStats
 	{
@@ -110,6 +124,7 @@ namespace aegis
 
 		// Image-based lighting state for the current environment.
 		bool IsEnvironmentActive() const { return m_EnvironmentActive; }
+		bool IsSsaoActive() const { return m_SsaoActive; }
 		u32 GetEnvironmentMipCount() const { return m_EnvironmentMap.SpecularMipCount; }
 		const EnvironmentMap& GetEnvironmentMap() const { return m_EnvironmentMap; }
 		const SceneRendererStats& GetStats() const { return m_Stats; }
@@ -139,6 +154,11 @@ namespace aegis
 		void releaseFrameResources();
 
 		bool createEnvironmentResources();
+		bool createSsaoResources();
+		void createSsaoTargets();
+		void recordDepthPrepass(nvrhi::ICommandList* commandList);
+		void recordSsaoPass(nvrhi::ICommandList* commandList);
+		void recordSsaoBlur(nvrhi::ICommandList* commandList);
 		nvrhi::TextureHandle createCubeTexture(u32 size, u32 mips, const std::string& debugName);
 		void uploadEnvironment(const EnvironmentMap& environment, nvrhi::ICommandList* commandList);
 		void rebuildFrameBindingSet();
@@ -159,12 +179,16 @@ namespace aegis
 		nvrhi::BindingLayoutHandle m_MaterialBindingLayout;
 		nvrhi::BindingLayoutHandle m_DepthBindingLayout;
 		nvrhi::BindingLayoutHandle m_PostBindingLayout;
+		nvrhi::BindingLayoutHandle m_SsaoBindingLayout;
+		nvrhi::BindingLayoutHandle m_BlurBindingLayout;
 
 		nvrhi::ShaderHandle m_PbrVertexShader;
 		nvrhi::ShaderHandle m_PbrPixelShader;
 		nvrhi::ShaderHandle m_DepthVertexShader;
 		nvrhi::ShaderHandle m_FullscreenVertexShader;
 		nvrhi::ShaderHandle m_TonemapPixelShader;
+		nvrhi::ShaderHandle m_SsaoPixelShader;
+		nvrhi::ShaderHandle m_SsaoBlurPixelShader;
 		nvrhi::ShaderHandle m_SkyPixelShader;
 
 		nvrhi::InputLayoutHandle m_SceneInputLayout;
@@ -173,9 +197,13 @@ namespace aegis
 		nvrhi::GraphicsPipelineHandle m_ShadowPipeline;
 		nvrhi::GraphicsPipelineHandle m_PbrPipeline;
 		nvrhi::GraphicsPipelineHandle m_TonemapPipeline;
+		nvrhi::GraphicsPipelineHandle m_PrepassPipeline;
+		nvrhi::GraphicsPipelineHandle m_SsaoPipeline;
+		nvrhi::GraphicsPipelineHandle m_SsaoBlurPipeline;
 		nvrhi::GraphicsPipelineHandle m_SkyPipeline;
 
 		nvrhi::SamplerHandle m_ShadowSampler;
+		nvrhi::SamplerHandle m_AoSampler;
 		nvrhi::SamplerHandle m_EnvironmentSampler;
 		nvrhi::SamplerHandle m_HdrSampler;
 
@@ -189,27 +217,39 @@ namespace aegis
 		bool m_EnvironmentActive = false;
 		nvrhi::BufferHandle m_FrameConstantBuffer;
 		nvrhi::BufferHandle m_DepthConstantBuffer;
+		nvrhi::BufferHandle m_CameraDepthConstantBuffer;
 		nvrhi::BindingSetHandle m_FrameBindingSet;
 		nvrhi::BindingSetHandle m_DepthBindingSet;
+		nvrhi::BindingSetHandle m_CameraDepthBindingSet;
+		nvrhi::BindingSetHandle m_SsaoBindingSet;
+		nvrhi::BindingSetHandle m_BlurBindingSet;
 		nvrhi::BindingSetHandle m_PostBindingSet;
 
 		nvrhi::TextureHandle m_HdrColor;
 		nvrhi::TextureHandle m_DepthTexture;
+		nvrhi::TextureHandle m_AoTexture;
+		nvrhi::TextureHandle m_AoBlurTexture;
+		nvrhi::TextureHandle m_AoFallback;
 		nvrhi::TextureHandle m_FinalColor;
 		nvrhi::TextureHandle m_ShadowMap;
 
 		nvrhi::FramebufferHandle m_SceneFramebuffer;
 		nvrhi::FramebufferHandle m_ShadowFramebuffer;
 		nvrhi::FramebufferHandle m_PostFramebuffer;
+		nvrhi::FramebufferHandle m_PrepassFramebuffer;
+		nvrhi::FramebufferHandle m_AoFramebuffer;
+		nvrhi::FramebufferHandle m_AoBlurFramebuffer;
 
 		std::vector<DrawItem> m_DrawItems;
 		// Entity names already reported for a missing mesh, so the warning appears once.
 		std::unordered_set<std::string> m_MissingMeshWarnings;
 		SceneFrameConstants m_FrameConstants;
+		SceneSsaoConstants m_SsaoConstants;
 		SceneRendererStats m_Stats;
 
 		u32 m_Width = 1;
 		u32 m_Height = 1;
+		bool m_SsaoActive = false;
 		bool m_Initialized = false;
 	};
 }

@@ -1723,8 +1723,11 @@ struct LuaEngine::Impl
 		// script belonged to is gone.
 		ecs::EntityHandle Handle{};
 		std::filesystem::path Path;
-		std::filesystem::file_time_type LastWriteTime{};
-		bool HasLastWriteTime = false;
+		// Content fingerprint of the last compiled version. Timestamps alone are
+		// not reliable on Windows (the last-write clock has a coarse tick), so the
+		// poll compares a hash of the file bytes instead.
+		u64 LastContentHash = 0;
+		bool HasContentHash = false;
 		bool Loaded = false;
 		bool HasStarted = false;
 		bool Disabled = false;
@@ -2297,7 +2300,30 @@ bool LuaEngine::Impl::loadScript(const std::filesystem::path& path,
 	return true;
 }
 
-bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReload)
+	namespace
+	{
+		// FNV-1a over the script bytes. Used instead of the file timestamp because
+		// Windows updates the last-write clock on a coarse tick, which made two
+		// quick saves look identical and silently skip the reload.
+		bool computeFileHash(const FileSystem::Path& path, u64& outHash)
+		{
+			std::vector<u8> bytes;
+			if (!FileSystem::TryReadBinaryFile(path, bytes))
+			{
+				return false;
+			}
+			u64 hash = 1469598103934665603ull;
+			for (const u8 byte : bytes)
+			{
+				hash ^= byte;
+				hash *= 1099511628211ull;
+			}
+			outHash = hash;
+			return true;
+		}
+	}
+
+	bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReload)
 {
 	Instance* instance = findInstance(id);
 	if (instance != nullptr && instance->Handle != entity.GetHandle())
@@ -2324,7 +2350,7 @@ bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReloa
 	if (!resolved.empty() && resolved != instance->Path)
 	{
 		instance->Path = resolved;
-		instance->HasLastWriteTime = false;
+		instance->HasContentHash = false;
 		instance->MissingPathLogged = false;
 		instance->MissingFileLogged = false;
 	}
@@ -2340,14 +2366,14 @@ bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReloa
 		return false;
 	}
 
-	if (!pollReload && instance->HasLastWriteTime)
+	if (!pollReload && instance->HasContentHash)
 	{
 		return instance->Loaded;
 	}
 
 	const std::string pathText = FileSystem::ToUtf8(instance->Path);
-	const std::optional<std::filesystem::file_time_type> writeTime = FileSystem::GetLastWriteTime(instance->Path);
-	if (!writeTime.has_value())
+	u64 contentHash = 0;
+	if (!computeFileHash(instance->Path, contentHash))
 	{
 		const bool wasLoaded = instance->Loaded;
 		if (!instance->MissingFileLogged)
@@ -2355,14 +2381,14 @@ bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReloa
 			instance->MissingFileLogged = true;
 			AE_CORE_ERROR("Scripting: entity {} script '{}' does not exist", describeEntity(OwnerScene, id), pathText);
 		}
-		instance->HasLastWriteTime = false;
+		instance->HasContentHash = false;
 		// A script whose file vanished keeps running the chunk it already has;
 		// deleting a file must not silently disable a live entity.
 		return wasLoaded;
 	}
 	instance->MissingFileLogged = false;
 
-	if (instance->HasLastWriteTime && *writeTime == instance->LastWriteTime)
+	if (instance->HasContentHash && contentHash == instance->LastContentHash)
 	{
 		return instance->Loaded;
 	}
@@ -2372,8 +2398,8 @@ bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReloa
 	PreparedScript prepared;
 	if (!loadScript(instance->Path, prepared, id, entityNameFor(OwnerScene, id)))
 	{
-		instance->LastWriteTime = *writeTime;
-		instance->HasLastWriteTime = true;
+		instance->LastContentHash = contentHash;
+		instance->HasContentHash = true;
 		return instance->Loaded;
 	}
 
@@ -2405,8 +2431,8 @@ bool LuaEngine::Impl::ensureScript(const Uuid& id, Entity entity, bool pollReloa
 	instance->HasStarted = false;
 	instance->Disabled = false;
 	instance->ConsecutiveErrors = 0;
-	instance->LastWriteTime = *writeTime;
-	instance->HasLastWriteTime = true;
+	instance->LastContentHash = contentHash;
+	instance->HasContentHash = true;
 
 	// Properties survive a reload: the table is rebuilt from the JSON the
 	// previous callbacks synced into the component.

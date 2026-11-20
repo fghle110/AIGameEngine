@@ -143,6 +143,8 @@ UUID strings as produced by `scene.createEntity` / `scene.list`.
 | `scene.save` | `path` (optional) | scene summary + `{saved,path}` | With `path` writes the scene there (relative paths resolve against `ProjectRoot`); without it invokes the editor `SaveScene` callback. |
 | `scene.load` | `path` | scene summary + `path` | Loads a scene through the editor `LoadScene` callback, or directly with `SceneSerializer` when no callback is registered. |
 | `scene.snapshot` | – | scene document | `SceneSerializer::Serialize()` of the live scene (version, scene metadata, entities). |
+| `environment.get` | – | `{ambientColor, ambientIntensity, hdriPath, hdriIntensity, exposure, enableIBL, enableShadows, enableSSAO, enableBloom, enableFXAA, shadowDistance, ssaoRadius, bloomThreshold, bloomIntensity}` | Reads the scene environment (renderer and post-process settings). |
+| `environment.set` | any of the `environment.get` fields (`ambientColor` is `number[3]`, `hdriPath` is a string, the rest are numbers ≥ 0 or booleans) | the updated environment | Applies the provided fields only, then returns the whole environment. `enableBloom`/`enableFXAA` are stored but not implemented yet. |
 | `transform.set` | `uuid`, plus any of `position` [3], `rotation` [3] (euler degrees), `rotationQuaternion` [4] (x,y,z,w), `scale` [3] | entity `transform` object | Sets the local transform. At least one property is required; `rotation` and `rotationQuaternion` are mutually exclusive; quaternions are normalised and must be non-zero. |
 | `component.add` | `uuid`, `type` | component data | Adds a component with default values. Fails when the entity already has it. |
 | `component.remove` | `uuid`, `type` | `{uuid,type,removed}` | Removes a component; fails when it is absent. |

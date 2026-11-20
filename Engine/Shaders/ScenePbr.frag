@@ -17,6 +17,8 @@ layout(set = 0, binding = 4) uniform textureCube uIrradianceCube;
 layout(set = 0, binding = 5) uniform textureCube uPrefilteredCube;
 layout(set = 0, binding = 6) uniform texture2D uBrdfLut;
 layout(set = 0, binding = 7) uniform sampler uEnvironmentSampler;
+layout(set = 0, binding = 8) uniform texture2D uAoTexture;
+layout(set = 0, binding = 9) uniform sampler uAoSampler;
 
 layout(set = 1, binding = 0) uniform texture2D uAlbedoTexture;
 layout(set = 1, binding = 1) uniform texture2D uNormalTexture;
@@ -33,6 +35,7 @@ layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec4 vTangent;
 layout(location = 3) in vec2 vTexCoord;
+layout(location = 4) in vec2 vScreenUv;
 
 layout(location = 0) out vec4 oColor;
 
@@ -234,7 +237,15 @@ void main()
 			fresnelSchlickRoughness(max(dot(normal, view), 0.0), f0, roughness) * (1.0 - roughness * 0.7);
 		ambientLighting = (diffuseAmbient + specularAmbient) * ambientTint;
 	}
-	outgoing += ambientLighting * occlusion;
+	// Screen-space ambient occlusion darkens only the indirect term, weighted by
+	// the environment flag's w component (0 = SSAO disabled).
+	const float ssaoStrength = clamp(frame.uEnvironment.w, 0.0, 1.0);
+	float screenAo = 1.0;
+	if (ssaoStrength > 0.0)
+	{
+		screenAo = mix(1.0, texture(sampler2D(uAoTexture, uAoSampler), vScreenUv).r, ssaoStrength);
+	}
+	outgoing += ambientLighting * occlusion * screenAo;
 
 	const vec3 emissive = object.uEmissive.rgb * object.uEmissive.w *
 		texture(sampler2D(uEmissiveTexture, uEmissiveSampler), vTexCoord).rgb;

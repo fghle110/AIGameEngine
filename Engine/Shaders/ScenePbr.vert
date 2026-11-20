@@ -16,6 +16,7 @@ layout(location = 0) out vec3 vWorldPosition;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec4 vTangent;
 layout(location = 3) out vec2 vTexCoord;
+layout(location = 4) out vec2 vScreenUv;
 
 void main()
 {
@@ -32,4 +33,8 @@ void main()
 	vTexCoord = aTexCoord;
 
 	gl_Position = frame.uViewProjection * worldPosition;
+
+	// Screen-space UV for the SSAO lookup. Clip y is +1 at the top row under
+	// NVRHI's DX-style viewport, so the texture v coordinate flips.
+	vScreenUv = gl_Position.xy / gl_Position.w * vec2(0.5, -0.5) + 0.5;
 }

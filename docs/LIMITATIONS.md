@@ -12,10 +12,10 @@ is listed, the engine either ignores the corresponding setting or does not expos
   48²/24²/32², which takes about a second in a debug build on the reference laptop. There
   is no GPU prefilter and no disk cache yet, and a scene with several different HDRIs pays
   that cost per environment switch.
-- **No screen-space ambient occlusion.** `EnvironmentSettings.EnableSSAO`, `SSAORadius`
-  and `EnableFXAA` are serialised but ignored. The PBR pass has no depth prepass, so it
-  cannot read the depth of the current frame; SSAO needs that prepass (or a deferred
-  renderer) before it can be added honestly.
+- **SSAO is a single half-resolution estimate without temporality.** `EnableSSAO` and
+  `SSAORadius` drive a 16-sample hemisphere kernel plus a 9x9 blur, and it multiplies only
+  the ambient term. It has no bilateral depth-aware blur, no temporal accumulation and no
+  denoise, so thin geometry can show halo noise; `EnableFXAA` is still ignored.
 - **No bloom.** `EnvironmentSettings.EnableBloom`, `BloomThreshold` and `BloomIntensity`
   are serialised but ignored. The post pass currently does exposure and ACES only; a bloom
   chain (bright pass, downsample, separable blur, additive composite) would slot in between

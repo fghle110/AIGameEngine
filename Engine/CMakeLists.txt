@@ -73,6 +73,7 @@ ae_add_shaders(Aegis FILES
     ImGui.vert ImGui.frag
     SceneDepthOnly.vert
     ScenePbr.vert ScenePbr.frag
-    ScenePost.vert SceneTonemap.frag SceneSky.frag)
+    ScenePost.vert SceneTonemap.frag SceneSky.frag
+    SceneSsao.frag SceneSsaoBlur.frag)
 
 ae_apply_warnings(Aegis)

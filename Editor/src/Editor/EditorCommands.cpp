@@ -1297,6 +1297,158 @@ void RegisterEditorCommands(EditorCommandContext& context)
 	    });
 
 	registerCommand(
+	    info("environment.get", "environment",
+	         "Reads the scene environment settings: ambient light, IBL, SSAO, shadows, exposure and bloom."),
+	    [context](const JsonValue&) -> CommandResult
+	    {
+		    Scene* scene = nullptr;
+		    CommandResult sceneResult = requireScene(context, scene);
+		    if (!sceneResult.Success)
+		    {
+			    return sceneResult;
+		    }
+		    const EnvironmentSettings& environment = scene->GetEnvironment();
+		    JsonValue result = JsonValue::MakeObject();
+		    JsonValue ambient = JsonValue::MakeArray();
+		    ambient.Push(static_cast<f64>(environment.AmbientColor.x));
+		    ambient.Push(static_cast<f64>(environment.AmbientColor.y));
+		    ambient.Push(static_cast<f64>(environment.AmbientColor.z));
+		    result.Set("ambientColor", std::move(ambient));
+		    result.Set("ambientIntensity", static_cast<f64>(environment.AmbientIntensity));
+		    result.Set("hdriPath", environment.HdriPath);
+		    result.Set("hdriIntensity", static_cast<f64>(environment.HdriIntensity));
+		    result.Set("exposure", static_cast<f64>(environment.Exposure));
+		    result.Set("enableIBL", environment.EnableIBL);
+		    result.Set("enableShadows", environment.EnableShadows);
+		    result.Set("enableSSAO", environment.EnableSSAO);
+		    result.Set("enableBloom", environment.EnableBloom);
+		    result.Set("enableFXAA", environment.EnableFXAA);
+		    result.Set("shadowDistance", static_cast<f64>(environment.ShadowDistance));
+		    result.Set("ssaoRadius", static_cast<f64>(environment.SSAORadius));
+		    result.Set("bloomThreshold", static_cast<f64>(environment.BloomThreshold));
+		    result.Set("bloomIntensity", static_cast<f64>(environment.BloomIntensity));
+		    return CommandResult::Ok(result);
+	    });
+
+	registerCommand(
+	    info("environment.set", "environment",
+	         "Updates any combination of scene environment settings. Omitted fields keep their value.",
+	         { parameter("ambientColor", "number[3]", false, "Ambient light colour (linear RGB)"),
+	           parameter("ambientIntensity", "number", false, "Ambient light intensity"),
+	           parameter("hdriPath", "string", false, "Equirectangular .hdr environment (empty = procedural sky)"),
+	           parameter("hdriIntensity", "number", false, "IBL intensity"),
+	           parameter("exposure", "number", false, "Tonemap exposure"),
+	           parameter("enableIBL", "bool", false, "Image-based lighting toggle"),
+	           parameter("enableShadows", "bool", false, "Sun shadow toggle"),
+	           parameter("enableSSAO", "bool", false, "Screen-space ambient occlusion toggle"),
+	           parameter("enableBloom", "bool", false, "Bloom toggle (not implemented yet)"),
+	           parameter("enableFXAA", "bool", false, "FXAA toggle (not implemented yet)"),
+	           parameter("shadowDistance", "number", false, "Shadow map fitting distance"),
+	           parameter("ssaoRadius", "number", false, "SSAO sample radius in metres"),
+	           parameter("bloomThreshold", "number", false, "Bloom bright-pass threshold"),
+	           parameter("bloomIntensity", "number", false, "Bloom composite intensity") }),
+	    [context](const JsonValue& params) -> CommandResult
+	    {
+		    Scene* scene = nullptr;
+		    CommandResult sceneResult = requireScene(context, scene);
+		    if (!sceneResult.Success)
+		    {
+			    return sceneResult;
+		    }
+		    if (params.IsNull() || !params.IsObject() || params.IsEmpty())
+		    {
+			    return CommandResult::Fail("environment.set requires at least one environment field");
+		    }
+
+		    EnvironmentSettings& environment = scene->GetEnvironment();
+		    if (params.Contains("ambientColor"))
+		    {
+			    CommandResult read = readVec3(*params.Find("ambientColor"), "ambientColor", environment.AmbientColor);
+			    if (!read.Success)
+			    {
+				    return read;
+			    }
+		    }
+		    const struct
+		    {
+			    const char* Key;
+			    f32* Target;
+		    } floats[] = {
+			    { "ambientIntensity", &environment.AmbientIntensity },
+			    { "hdriIntensity", &environment.HdriIntensity },
+			    { "exposure", &environment.Exposure },
+			    { "shadowDistance", &environment.ShadowDistance },
+			    { "ssaoRadius", &environment.SSAORadius },
+			    { "bloomThreshold", &environment.BloomThreshold },
+			    { "bloomIntensity", &environment.BloomIntensity },
+		    };
+		    for (const auto& field : floats)
+		    {
+			    if (!params.Contains(field.Key))
+			    {
+				    continue;
+			    }
+			    CommandResult read = readFloatAtLeast(*params.Find(field.Key), field.Key, 0.0f, *field.Target);
+			    if (!read.Success)
+			    {
+				    return read;
+			    }
+		    }
+		    const struct
+		    {
+			    const char* Key;
+			    bool* Target;
+		    } flags[] = {
+			    { "enableIBL", &environment.EnableIBL },
+			    { "enableShadows", &environment.EnableShadows },
+			    { "enableSSAO", &environment.EnableSSAO },
+			    { "enableBloom", &environment.EnableBloom },
+			    { "enableFXAA", &environment.EnableFXAA },
+		    };
+		    for (const auto& field : flags)
+		    {
+			    if (!params.Contains(field.Key))
+			    {
+				    continue;
+			    }
+			    CommandResult read = readBool(params, field.Key, false, *field.Target);
+			    if (!read.Success)
+			    {
+				    return read;
+			    }
+		    }
+		    if (params.Contains("hdriPath"))
+		    {
+			    CommandResult read = readString(params, "hdriPath", false, environment.HdriPath);
+			    if (!read.Success)
+			    {
+				    return read;
+			    }
+		    }
+
+		    JsonValue result = JsonValue::MakeObject();
+		    JsonValue ambient = JsonValue::MakeArray();
+		    ambient.Push(static_cast<f64>(environment.AmbientColor.x));
+		    ambient.Push(static_cast<f64>(environment.AmbientColor.y));
+		    ambient.Push(static_cast<f64>(environment.AmbientColor.z));
+		    result.Set("ambientColor", std::move(ambient));
+		    result.Set("ambientIntensity", static_cast<f64>(environment.AmbientIntensity));
+		    result.Set("hdriPath", environment.HdriPath);
+		    result.Set("hdriIntensity", static_cast<f64>(environment.HdriIntensity));
+		    result.Set("exposure", static_cast<f64>(environment.Exposure));
+		    result.Set("enableIBL", environment.EnableIBL);
+		    result.Set("enableShadows", environment.EnableShadows);
+		    result.Set("enableSSAO", environment.EnableSSAO);
+		    result.Set("enableBloom", environment.EnableBloom);
+		    result.Set("enableFXAA", environment.EnableFXAA);
+		    result.Set("shadowDistance", static_cast<f64>(environment.ShadowDistance));
+		    result.Set("ssaoRadius", static_cast<f64>(environment.SSAORadius));
+		    result.Set("bloomThreshold", static_cast<f64>(environment.BloomThreshold));
+		    result.Set("bloomIntensity", static_cast<f64>(environment.BloomIntensity));
+		    return CommandResult::Ok(result);
+	    });
+
+	registerCommand(
 	    info("scene.list", "scene", "Lists every entity with its UUID, name, active flag, parent and component names."),
 	    [context](const JsonValue&) -> CommandResult
 	    {

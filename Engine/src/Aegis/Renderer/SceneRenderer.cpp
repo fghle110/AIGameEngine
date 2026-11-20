@@ -25,6 +25,7 @@ namespace aegis
 		constexpr nvrhi::Format c_HdrFormat = nvrhi::Format::RGBA16_FLOAT;
 		constexpr nvrhi::Format c_DepthFormat = nvrhi::Format::D32;
 		constexpr nvrhi::Format c_DisplayFormat = nvrhi::Format::SRGBA8_UNORM;
+		constexpr nvrhi::Format c_AoFormat = nvrhi::Format::R8_UNORM;
 
 		bool LoadShaderBytecode(const FileSystem::Path& directory, const char* fileName, std::vector<u8>& outBytecode)
 		{
@@ -155,6 +156,25 @@ namespace aegis
 		m_TonemapPipeline = nullptr;
 		m_SkyPipeline = nullptr;
 		m_SkyPixelShader = nullptr;
+		m_PrepassPipeline = nullptr;
+		m_SsaoPipeline = nullptr;
+		m_SsaoBlurPipeline = nullptr;
+		m_SsaoPixelShader = nullptr;
+		m_SsaoBlurPixelShader = nullptr;
+		m_SsaoBindingLayout = nullptr;
+		m_BlurBindingLayout = nullptr;
+		m_SsaoBindingSet = nullptr;
+		m_BlurBindingSet = nullptr;
+		m_CameraDepthBindingSet = nullptr;
+		m_CameraDepthConstantBuffer = nullptr;
+		m_AoTexture = nullptr;
+		m_AoBlurTexture = nullptr;
+		m_AoFallback = nullptr;
+		m_PrepassFramebuffer = nullptr;
+		m_AoFramebuffer = nullptr;
+		m_AoBlurFramebuffer = nullptr;
+		m_AoSampler = nullptr;
+		m_SsaoActive = false;
 
 		m_SceneInputLayout = nullptr;
 		m_DepthInputLayout = nullptr;
@@ -202,6 +222,9 @@ namespace aegis
 			nvrhi::BindingLayoutItem::Texture_SRV(5),
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
 			nvrhi::BindingLayoutItem::Sampler(7),
+			// Screen-space ambient occlusion result (written by the SSAO blur pass).
+			nvrhi::BindingLayoutItem::Texture_SRV(8),
+			nvrhi::BindingLayoutItem::Sampler(9),
 		};
 		m_FrameBindingLayout = m_Device->createBindingLayout(frameLayoutDesc);
 
@@ -251,8 +274,36 @@ namespace aegis
 		};
 		m_PostBindingLayout = m_Device->createBindingLayout(postLayoutDesc);
 
+		// Set 0 of the SSAO pass: frame constants (for the inverse view projection),
+		// the depth buffer and the AO parameters as push constants.
+		nvrhi::BindingLayoutDesc ssaoLayoutDesc;
+		ssaoLayoutDesc.visibility = nvrhi::ShaderType::All;
+		ssaoLayoutDesc.registerSpace = 0;
+		ssaoLayoutDesc.registerSpaceIsDescriptorSet = true;
+		ssaoLayoutDesc.bindingOffsets = ZeroBindingOffsets();
+		ssaoLayoutDesc.bindings = {
+			nvrhi::BindingLayoutItem::ConstantBuffer(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::Sampler(2),
+			PushConstantItem(3, sizeof(SceneSsaoConstants)),
+		};
+		m_SsaoBindingLayout = m_Device->createBindingLayout(ssaoLayoutDesc);
+
+		// Set 0 of the SSAO blur pass.
+		nvrhi::BindingLayoutDesc blurLayoutDesc;
+		blurLayoutDesc.visibility = nvrhi::ShaderType::All;
+		blurLayoutDesc.registerSpace = 0;
+		blurLayoutDesc.registerSpaceIsDescriptorSet = true;
+		blurLayoutDesc.bindingOffsets = ZeroBindingOffsets();
+		blurLayoutDesc.bindings = {
+			nvrhi::BindingLayoutItem::Texture_SRV(0),
+			nvrhi::BindingLayoutItem::Sampler(1),
+			PushConstantItem(2, sizeof(SceneBlurConstants)),
+		};
+		m_BlurBindingLayout = m_Device->createBindingLayout(blurLayoutDesc);
+
 		if (m_FrameBindingLayout == nullptr || m_MaterialBindingLayout == nullptr || m_DepthBindingLayout == nullptr ||
-			m_PostBindingLayout == nullptr)
+			m_PostBindingLayout == nullptr || m_SsaoBindingLayout == nullptr || m_BlurBindingLayout == nullptr)
 		{
 			AE_CORE_CRITICAL("Could not create the scene renderer binding layouts");
 			return false;
@@ -335,9 +386,61 @@ namespace aegis
 			return false;
 		}
 
+		// Camera-space depth prepass constant buffer (same shader and layout as the
+		// shadow pass, different matrix).
+		nvrhi::BufferDesc cameraDepthDesc;
+		cameraDepthDesc.byteSize = sizeof(glm::mat4);
+		cameraDepthDesc.isConstantBuffer = true;
+		cameraDepthDesc.initialState = nvrhi::ResourceStates::ConstantBuffer;
+		cameraDepthDesc.keepInitialState = true;
+		cameraDepthDesc.debugName = "Scene camera depth constants";
+		m_CameraDepthConstantBuffer = m_Device->createBuffer(cameraDepthDesc);
+
 		nvrhi::BindingSetDesc depthSetDesc;
 		depthSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_DepthConstantBuffer));
 		m_DepthBindingSet = m_Device->createBindingSet(depthSetDesc, m_DepthBindingLayout);
+
+		nvrhi::BindingSetDesc cameraDepthSetDesc;
+		cameraDepthSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_CameraDepthConstantBuffer));
+		m_CameraDepthBindingSet = m_Device->createBindingSet(cameraDepthSetDesc, m_DepthBindingLayout);
+
+		nvrhi::SamplerDesc aoSamplerDesc;
+		aoSamplerDesc.setMinFilter(true);
+		aoSamplerDesc.setMagFilter(true);
+		aoSamplerDesc.setMipFilter(false);
+		aoSamplerDesc.setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
+		m_AoSampler = m_Device->createSampler(aoSamplerDesc);
+
+		// 1x1 white AO fallback so the frame binding set is valid before the first
+		// resize creates the real targets, and whenever SSAO is disabled.
+		nvrhi::TextureDesc aoFallbackDesc;
+		aoFallbackDesc.width = 1;
+		aoFallbackDesc.height = 1;
+		aoFallbackDesc.format = c_AoFormat;
+		aoFallbackDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		aoFallbackDesc.isShaderResource = true;
+		aoFallbackDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		aoFallbackDesc.keepInitialState = true;
+		aoFallbackDesc.debugName = "SSAO white fallback";
+		m_AoFallback = m_Device->createTexture(aoFallbackDesc);
+		m_AoTexture = m_AoFallback;
+		if (m_AoFallback == nullptr || m_AoSampler == nullptr || m_CameraDepthConstantBuffer == nullptr ||
+			m_CameraDepthBindingSet == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the SSAO fallback resources");
+			return false;
+		}
+
+		if (nvrhi::CommandListHandle aoUpload = m_Device->createCommandList(); aoUpload != nullptr)
+		{
+			const u8 white = 0xFF;
+			aoUpload->open();
+			aoUpload->writeTexture(m_AoFallback, 0, 0, &white, 1);
+			aoUpload->close();
+			nvrhi::ICommandList* rawAoUpload = aoUpload;
+			m_Device->executeCommandLists(&rawAoUpload, 1);
+			m_Device->waitForIdle();
+		}
 
 		if (m_DepthBindingSet == nullptr || !createEnvironmentResources())
 		{
@@ -429,7 +532,11 @@ namespace aegis
 		std::vector<u8> fullscreenVertexBytecode;
 		std::vector<u8> tonemapPixelBytecode;
 		std::vector<u8> skyPixelBytecode;
-		if (!LoadShaderBytecode(shaderDirectory, "SceneSky.frag.spv", skyPixelBytecode) ||
+		std::vector<u8> ssaoPixelBytecode;
+		std::vector<u8> ssaoBlurPixelBytecode;
+		if (!LoadShaderBytecode(shaderDirectory, "SceneSsao.frag.spv", ssaoPixelBytecode) ||
+			!LoadShaderBytecode(shaderDirectory, "SceneSsaoBlur.frag.spv", ssaoBlurPixelBytecode) ||
+			!LoadShaderBytecode(shaderDirectory, "SceneSky.frag.spv", skyPixelBytecode) ||
 			!LoadShaderBytecode(shaderDirectory, "ScenePbr.vert.spv", pbrVertexBytecode) ||
 			!LoadShaderBytecode(shaderDirectory, "ScenePbr.frag.spv", pbrPixelBytecode) ||
 			!LoadShaderBytecode(shaderDirectory, "SceneDepthOnly.vert.spv", depthVertexBytecode) ||
@@ -448,10 +555,13 @@ namespace aegis
 		m_TonemapPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, tonemapPixelBytecode,
 			"SceneTonemap.frag");
 		m_SkyPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, skyPixelBytecode, "SceneSky.frag");
+		m_SsaoPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, ssaoPixelBytecode, "SceneSsao.frag");
+		m_SsaoBlurPixelShader = CreateShader(m_Device, nvrhi::ShaderType::Pixel, ssaoBlurPixelBytecode,
+			"SceneSsaoBlur.frag");
 
 		return m_PbrVertexShader != nullptr && m_PbrPixelShader != nullptr && m_DepthVertexShader != nullptr &&
 			   m_FullscreenVertexShader != nullptr && m_TonemapPixelShader != nullptr &&
-			   m_SkyPixelShader != nullptr;
+			   m_SkyPixelShader != nullptr && m_SsaoPixelShader != nullptr && m_SsaoBlurPixelShader != nullptr;
 	}
 
 	bool SceneRenderer::createPipelines()
@@ -508,7 +618,8 @@ namespace aegis
 		pbrDesc.bindingLayouts = { m_FrameBindingLayout, m_MaterialBindingLayout };
 		pbrDesc.renderState.depthStencilState.depthTestEnable = true;
 		pbrDesc.renderState.depthStencilState.depthWriteEnable = true;
-		pbrDesc.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
+		// LessEqual so the forward pass passes the depth written by the SSAO prepass.
+		pbrDesc.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::LessOrEqual;
 		pbrDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::Back;
 		pbrDesc.renderState.rasterState.frontCounterClockwise = true;
 
@@ -547,8 +658,51 @@ namespace aegis
 		tonemapInfo.setSampleCount(1);
 		m_TonemapPipeline = m_Device->createGraphicsPipeline(tonemapDesc, tonemapInfo);
 
+		// Camera depth prepass: the same depth-only vertex shader as the shadow pass,
+		// but without the shadow depth bias.
+		nvrhi::GraphicsPipelineDesc prepassDesc;
+		prepassDesc.setPrimType(nvrhi::PrimitiveType::TriangleList);
+		prepassDesc.setVertexShader(m_DepthVertexShader);
+		prepassDesc.setInputLayout(m_DepthInputLayout);
+		prepassDesc.bindingLayouts = { m_DepthBindingLayout };
+		prepassDesc.renderState.depthStencilState.depthTestEnable = true;
+		prepassDesc.renderState.depthStencilState.depthWriteEnable = true;
+		prepassDesc.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Less;
+		prepassDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::Back;
+		prepassDesc.renderState.rasterState.frontCounterClockwise = true;
+
+		nvrhi::FramebufferInfo prepassInfo;
+		prepassInfo.setDepthFormat(c_DepthFormat);
+		prepassInfo.setSampleCount(1);
+		m_PrepassPipeline = m_Device->createGraphicsPipeline(prepassDesc, prepassInfo);
+
+		nvrhi::FramebufferInfo aoInfo;
+		aoInfo.addColorFormat(c_AoFormat);
+		aoInfo.setSampleCount(1);
+
+		nvrhi::GraphicsPipelineDesc ssaoDesc;
+		ssaoDesc.setPrimType(nvrhi::PrimitiveType::TriangleList);
+		ssaoDesc.setVertexShader(m_FullscreenVertexShader);
+		ssaoDesc.setPixelShader(m_SsaoPixelShader);
+		ssaoDesc.bindingLayouts = { m_SsaoBindingLayout };
+		ssaoDesc.renderState.depthStencilState.depthTestEnable = false;
+		ssaoDesc.renderState.depthStencilState.depthWriteEnable = false;
+		ssaoDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+		m_SsaoPipeline = m_Device->createGraphicsPipeline(ssaoDesc, aoInfo);
+
+		nvrhi::GraphicsPipelineDesc ssaoBlurDesc;
+		ssaoBlurDesc.setPrimType(nvrhi::PrimitiveType::TriangleList);
+		ssaoBlurDesc.setVertexShader(m_FullscreenVertexShader);
+		ssaoBlurDesc.setPixelShader(m_SsaoBlurPixelShader);
+		ssaoBlurDesc.bindingLayouts = { m_BlurBindingLayout };
+		ssaoBlurDesc.renderState.depthStencilState.depthTestEnable = false;
+		ssaoBlurDesc.renderState.depthStencilState.depthWriteEnable = false;
+		ssaoBlurDesc.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+		m_SsaoBlurPipeline = m_Device->createGraphicsPipeline(ssaoBlurDesc, aoInfo);
+
 		if (m_ShadowPipeline == nullptr || m_PbrPipeline == nullptr || m_TonemapPipeline == nullptr ||
-			m_SkyPipeline == nullptr)
+			m_SkyPipeline == nullptr || m_PrepassPipeline == nullptr || m_SsaoPipeline == nullptr ||
+			m_SsaoBlurPipeline == nullptr)
 		{
 			AE_CORE_CRITICAL("Could not create the scene graphics pipelines");
 			return false;
@@ -564,6 +718,13 @@ namespace aegis
 		m_HdrColor = nullptr;
 		m_DepthTexture = nullptr;
 		m_FinalColor = nullptr;
+		m_PrepassFramebuffer = nullptr;
+		m_AoFramebuffer = nullptr;
+		m_AoBlurFramebuffer = nullptr;
+		m_SsaoBindingSet = nullptr;
+		m_BlurBindingSet = nullptr;
+		m_AoTexture = m_AoFallback;
+		m_AoBlurTexture = nullptr;
 	}
 
 	bool SceneRenderer::createFrameResources()
@@ -590,7 +751,8 @@ namespace aegis
 		depthDesc.format = c_DepthFormat;
 		depthDesc.dimension = nvrhi::TextureDimension::Texture2D;
 		depthDesc.isRenderTarget = true;
-		depthDesc.isShaderResource = false;
+		// Read by the SSAO pass, so it needs a shader-resource view.
+		depthDesc.isShaderResource = true;
 		depthDesc.clearValue = nvrhi::Color(1.0f);
 		depthDesc.useClearValue = true;
 		depthDesc.initialState = nvrhi::ResourceStates::DepthWrite;
@@ -645,6 +807,56 @@ namespace aegis
 			AE_CORE_CRITICAL("Could not create the scene framebuffers at {}x{}", m_Width, m_Height);
 			return false;
 		}
+
+		// SSAO runs at half resolution and reads the depth buffer written by the
+		// prepass. Two R8 targets ping-pong between the noise pass and the blur.
+		const u32 aoWidth = Max(m_Width / 2, 1u);
+		const u32 aoHeight = Max(m_Height / 2, 1u);
+		nvrhi::TextureDesc aoDesc;
+		aoDesc.width = aoWidth;
+		aoDesc.height = aoHeight;
+		aoDesc.format = c_AoFormat;
+		aoDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		aoDesc.isRenderTarget = true;
+		aoDesc.isShaderResource = true;
+		aoDesc.initialState = nvrhi::ResourceStates::RenderTarget;
+		aoDesc.keepInitialState = true;
+		aoDesc.debugName = "SSAO";
+		m_AoTexture = m_Device->createTexture(aoDesc);
+		aoDesc.debugName = "SSAO blurred";
+		m_AoBlurTexture = m_Device->createTexture(aoDesc);
+
+		nvrhi::FramebufferDesc prepassFramebufferDesc;
+		prepassFramebufferDesc.setDepthAttachment(m_DepthTexture);
+		m_PrepassFramebuffer = m_Device->createFramebuffer(prepassFramebufferDesc);
+
+		nvrhi::FramebufferDesc aoFramebufferDesc;
+		aoFramebufferDesc.addColorAttachment(m_AoTexture);
+		m_AoFramebuffer = m_Device->createFramebuffer(aoFramebufferDesc);
+
+		nvrhi::FramebufferDesc aoBlurFramebufferDesc;
+		aoBlurFramebufferDesc.addColorAttachment(m_AoBlurTexture);
+		m_AoBlurFramebuffer = m_Device->createFramebuffer(aoBlurFramebufferDesc);
+
+		nvrhi::BindingSetDesc ssaoSetDesc;
+		ssaoSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer));
+		ssaoSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture));
+		ssaoSetDesc.addItem(nvrhi::BindingSetItem::Sampler(2, m_AoSampler));
+		m_SsaoBindingSet = m_Device->createBindingSet(ssaoSetDesc, m_SsaoBindingLayout);
+
+		nvrhi::BindingSetDesc blurSetDesc;
+		blurSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_AoTexture));
+		blurSetDesc.addItem(nvrhi::BindingSetItem::Sampler(1, m_AoSampler));
+		m_BlurBindingSet = m_Device->createBindingSet(blurSetDesc, m_BlurBindingLayout);
+
+		rebuildFrameBindingSet();
+
+		if (m_PrepassFramebuffer == nullptr || m_AoFramebuffer == nullptr || m_AoBlurFramebuffer == nullptr ||
+			m_SsaoBindingSet == nullptr || m_BlurBindingSet == nullptr || m_FrameBindingSet == nullptr)
+		{
+			AE_CORE_CRITICAL("Could not create the SSAO resources at {}x{}", aoWidth, aoHeight);
+			return false;
+		}
 		return true;
 	}
 
@@ -669,7 +881,7 @@ namespace aegis
 	{
 		if (m_Device == nullptr || m_FrameConstantBuffer == nullptr || m_ShadowMap == nullptr ||
 			m_IrradianceCube == nullptr || m_SpecularCube == nullptr || m_BrdfLut == nullptr ||
-			m_EnvironmentSampler == nullptr)
+			m_EnvironmentSampler == nullptr || m_AoFallback == nullptr || m_AoSampler == nullptr)
 		{
 			return;
 		}
@@ -686,6 +898,8 @@ namespace aegis
 		frameSetDesc.addItem(specularItem);
 		frameSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(6, m_BrdfLut));
 		frameSetDesc.addItem(nvrhi::BindingSetItem::Sampler(7, m_EnvironmentSampler));
+		frameSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(8, m_AoBlurTexture != nullptr ? m_AoBlurTexture : m_AoFallback));
+		frameSetDesc.addItem(nvrhi::BindingSetItem::Sampler(9, m_AoSampler));
 		m_FrameBindingSet = m_Device->createBindingSet(frameSetDesc, m_FrameBindingLayout);
 		if (m_FrameBindingSet == nullptr)
 		{
@@ -1001,7 +1215,10 @@ namespace aegis
 		m_FrameConstants.PostProcess = glm::vec4(Max(environment.Exposure, 0.0f), environment.BloomIntensity,
 			environment.ShadowDistance, renderShadows ? 1.0f : 0.0f);
 		m_FrameConstants.Environment = glm::vec4(m_EnvironmentActive ? 1.0f : 0.0f,
-			static_cast<f32>(Max(m_EnvironmentMap.SpecularMipCount, 1u)), environment.HdriIntensity, 0.0f);
+			static_cast<f32>(Max(m_EnvironmentMap.SpecularMipCount, 1u)), environment.HdriIntensity,
+			m_SsaoActive ? 1.0f : 0.0f);
+		m_SsaoConstants.Params = glm::vec4(Max(environment.SSAORadius, 0.01f), 0.02f,
+			m_SsaoActive ? 1.0f : 0.0f, 0.0f);
 		m_Stats.PointLights = pointLightCount;
 	}
 
@@ -1047,6 +1264,70 @@ namespace aegis
 		commandList->endMarker();
 	}
 
+	void SceneRenderer::recordDepthPrepass(nvrhi::ICommandList* commandList)
+	{
+		commandList->beginMarker("Depth prepass");
+		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
+
+		const nvrhi::ViewportState viewport = FullViewport(static_cast<f32>(m_Width), static_cast<f32>(m_Height));
+		for (const DrawItem& item : m_DrawItems)
+		{
+			const Submesh& submesh = item.Mesh->Geometry.GetSubmeshes()[item.SubmeshIndex];
+
+			nvrhi::GraphicsState state;
+			state.pipeline = m_PrepassPipeline;
+			state.framebuffer = m_PrepassFramebuffer;
+			state.bindings = { m_CameraDepthBindingSet };
+			state.setViewport(viewport);
+			state.addVertexBuffer(nvrhi::VertexBufferBinding().setBuffer(item.Mesh->VertexBuffer).setSlot(0)
+				.setOffset(0));
+			state.setIndexBuffer(nvrhi::IndexBufferBinding().setBuffer(item.Mesh->IndexBuffer)
+				.setFormat(nvrhi::Format::R32_UINT).setOffset(0));
+			commandList->setGraphicsState(state);
+
+			SceneObjectConstants constants;
+			FillObjectConstants(constants, item.Model, item.Material->GetFactors());
+			commandList->setPushConstants(&constants, sizeof(constants));
+			commandList->drawIndexed(nvrhi::DrawArguments().setVertexCount(submesh.IndexCount)
+				.setStartIndexLocation(submesh.FirstIndex));
+		}
+		commandList->endMarker();
+	}
+
+	void SceneRenderer::recordSsaoPass(nvrhi::ICommandList* commandList)
+	{
+		const nvrhi::TextureDesc aoDesc = m_AoTexture->getDesc();
+		commandList->beginMarker("SSAO");
+		nvrhi::GraphicsState state;
+		state.pipeline = m_SsaoPipeline;
+		state.framebuffer = m_AoFramebuffer;
+		state.bindings = { m_SsaoBindingSet };
+		state.setViewport(FullViewport(static_cast<f32>(aoDesc.width), static_cast<f32>(aoDesc.height)));
+		commandList->setGraphicsState(state);
+		commandList->setPushConstants(&m_SsaoConstants, sizeof(m_SsaoConstants));
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		commandList->endMarker();
+	}
+
+	void SceneRenderer::recordSsaoBlur(nvrhi::ICommandList* commandList)
+	{
+		const nvrhi::TextureDesc aoDesc = m_AoTexture->getDesc();
+		commandList->beginMarker("SSAO blur");
+		nvrhi::GraphicsState state;
+		state.pipeline = m_SsaoBlurPipeline;
+		state.framebuffer = m_AoBlurFramebuffer;
+		state.bindings = { m_BlurBindingSet };
+		state.setViewport(FullViewport(static_cast<f32>(aoDesc.width), static_cast<f32>(aoDesc.height)));
+		commandList->setGraphicsState(state);
+
+		SceneBlurConstants blurConstants;
+		blurConstants.TexelSize = glm::vec4(1.0f / static_cast<f32>(aoDesc.width),
+			1.0f / static_cast<f32>(aoDesc.height), 0.0f, 0.0f);
+		commandList->setPushConstants(&blurConstants, sizeof(blurConstants));
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		commandList->endMarker();
+	}
+
 	void SceneRenderer::recordSkyPass(nvrhi::ICommandList* commandList)
 	{
 		commandList->beginMarker("Sky");
@@ -1064,7 +1345,11 @@ namespace aegis
 	{
 		commandList->beginMarker("Forward PBR");
 		commandList->clearTextureFloat(m_HdrColor, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
-		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
+		if (!m_SsaoActive)
+		{
+			// With SSAO the prepass already cleared the depth buffer.
+			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
+		}
 
 		// The sky fills every pixel the geometry leaves untouched and does not write
 		// depth, so the PBR pass simply draws over it.
@@ -1123,6 +1408,10 @@ namespace aegis
 		}
 
 		m_Stats = SceneRendererStats{};
+		const EnvironmentSettings& environment = scene.GetEnvironment();
+		m_SsaoActive = environment.EnableSSAO && m_PrepassPipeline != nullptr && m_SsaoPipeline != nullptr &&
+					   m_SsaoBlurPipeline != nullptr && m_AoFramebuffer != nullptr && m_AoBlurFramebuffer != nullptr &&
+					   m_SsaoBindingSet != nullptr && m_BlurBindingSet != nullptr && m_PrepassFramebuffer != nullptr;
 		updateEnvironment(scene, commandList);
 		gatherDrawItems(scene, cameraPosition);
 		fillFrameConstants(scene, viewProjection, cameraPosition, lightViewProjection, renderShadows);
@@ -1137,6 +1426,15 @@ namespace aegis
 			commandList->writeBuffer(m_DepthConstantBuffer, &lightViewProjectionTransposed,
 				sizeof(lightViewProjectionTransposed));
 			recordShadowPass(commandList);
+		}
+
+		if (m_SsaoActive)
+		{
+			commandList->writeBuffer(m_CameraDepthConstantBuffer, &m_FrameConstants.ViewProjection,
+				sizeof(glm::mat4));
+			recordDepthPrepass(commandList);
+			recordSsaoPass(commandList);
+			recordSsaoBlur(commandList);
 		}
 
 		recordForwardPass(commandList);

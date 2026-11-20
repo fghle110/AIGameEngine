@@ -537,3 +537,95 @@ TEST_CASE("SceneRenderer: resizing recreates the render targets")
 
 	renderer.Shutdown();
 }
+
+TEST_CASE("SceneRenderer: SSAO darkens the frame and can be toggled at runtime")
+{
+	HeadlessDevice device;
+	if (!CreateHeadlessDevice(device))
+	{
+		AE_CORE_WARN("Vulkan 1.3 is unavailable on this machine: skipping the SSAO GPU test");
+		return;
+	}
+
+	constexpr u32 c_Size = 64;
+	SceneRenderer renderer;
+	REQUIRE(renderer.Initialize(device.Nvrhi.Get()));
+	renderer.Resize(c_Size, c_Size);
+
+	// A cube sitting on a large floor creates the corner where ambient occlusion
+	// must darken the image.
+	Scene scene("ssao");
+	Entity floor = scene.CreateEntity("Floor");
+	MeshRendererComponent floorRenderer;
+	floorRenderer.Mesh = renderer.GetAssetCache().GetBuiltinMesh(PrimitiveType::Plane);
+	floorRenderer.CastShadows = false;
+	floor.AddComponent<MeshRendererComponent>(floorRenderer);
+	floor.GetComponent<TransformComponent>().LocalScale = glm::vec3(8.0f, 1.0f, 8.0f);
+
+	Entity cube = scene.CreateEntity("Cube");
+	MeshRendererComponent cubeRenderer;
+	cubeRenderer.Mesh = renderer.GetAssetCache().GetBuiltinMesh(PrimitiveType::Cube);
+	cube.AddComponent<MeshRendererComponent>(cubeRenderer);
+	cube.GetComponent<TransformComponent>().LocalPosition = glm::vec3(0.0f, 0.5f, 0.0f);
+
+	Entity sun = scene.CreateEntity("Sun");
+	LightComponent light;
+	light.Type = LightType::Directional;
+	light.Intensity = 3.0f;
+	sun.AddComponent<LightComponent>(light);
+	sun.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(-60.0f, 25.0f, 0.0f));
+	scene.UpdateTransforms();
+
+	const glm::vec3 cameraPosition(1.5f, 1.4f, 3.0f);
+	const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3(0.0f, 0.35f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+	const glm::mat4 projection = glm::perspective(glm::radians(50.0f), 1.0f, 0.1f, 100.0f);
+	const glm::mat4 lightViewProjection = SceneRenderer::ComputeDirectionalShadowMatrix(scene, cameraPosition, 20.0f);
+
+	const auto renderBrightness = [&]()
+	{
+		nvrhi::CommandListHandle commandList = device.Nvrhi->createCommandList();
+		commandList->open();
+		renderer.Render(commandList, scene, projection * view, cameraPosition, lightViewProjection, false);
+		commandList->close();
+		nvrhi::ICommandList* rawList = commandList;
+		device.Nvrhi->executeCommandLists(&rawList, 1);
+		device.Nvrhi->waitForIdle();
+
+		u32 width = 0;
+		u32 height = 0;
+		const std::vector<u8> pixels = ReadBackTexture(device.Nvrhi.Get(), renderer.GetFinalColor(), width, height);
+		REQUIRE(width == c_Size);
+		REQUIRE(height == c_Size);
+		REQUIRE(pixels.size() == static_cast<usize>(c_Size) * c_Size * 4);
+
+		f64 luminance = 0.0;
+		for (usize i = 0; i < pixels.size(); i += 4)
+		{
+			luminance += 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+		}
+		return luminance / static_cast<f64>(c_Size * c_Size);
+	};
+
+	scene.GetEnvironment().EnableSSAO = true;
+	const f64 withSsao = renderBrightness();
+	CHECK(renderer.IsSsaoActive());
+	CHECK(withSsao > 10.0); // the scene is lit, not black
+
+	scene.GetEnvironment().EnableSSAO = false;
+	const f64 withoutSsao = renderBrightness();
+	CHECK_FALSE(renderer.IsSsaoActive());
+	CHECK(withoutSsao > 10.0);
+
+	// Occlusion only removes indirect light, so the frame gets darker but stays lit.
+	CHECK(withoutSsao > withSsao);
+	CHECK(withoutSsao - withSsao > 0.05);
+
+	// Re-enabling must rebuild the AO path instead of leaving stale state.
+	scene.GetEnvironment().EnableSSAO = true;
+	const f64 reEnabled = renderBrightness();
+	CHECK(renderer.IsSsaoActive());
+	CHECK(reEnabled < withoutSsao);
+	CHECK(reEnabled == doctest::Approx(withSsao).epsilon(0.02));
+
+	renderer.Shutdown();
+}

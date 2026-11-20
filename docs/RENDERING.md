@@ -11,6 +11,8 @@ outside `Aegis/Renderer` and `Aegis/Assets` includes NVRHI headers.
 Renderer::BeginFrame          acquire swapchain image, open the frame command list, clear
   SceneRenderer::Render       0. IBL environment upload when the HDRI changed
                               1. shadow map pass (depth only, 2048x2048)
+                              1b. SSAO (optional): camera depth prepass, half-res AO
+                                  noise pass and a 9x9 blur, consumed by the PBR ambient term
                               2. forward PBR pass into RGBA16F + D32, starting with the sky
                               3. post pass: exposure -> ACES -> SRGB8 display texture
   ImGuiRenderer::Render       UI, including the viewport image that samples the display texture
@@ -38,6 +40,23 @@ is covered by GPU-free unit tests (`Tests/Renderer/EnvironmentMapTests.cpp`).
 
 The cube textures are RGBA16F and are uploaded with packed half floats: NVRHI's
 `writeTexture` copies raw bytes, it does not convert formats.
+
+## Screen-space ambient occlusion
+
+`EnvironmentSettings.EnableSSAO` switches on a depth-prepass AO chain:
+
+1. `SceneDepthOnly.vert` renders the camera depth into the scene depth texture
+   (`SceneRenderer::recordDepthPrepass`).
+2. `SceneSsao.frag` reconstructs world positions from that depth, derives normals
+   with screen-space derivatives and evaluates a 16-sample hemisphere kernel at
+   half resolution.
+3. `SceneSsaoBlur.frag` applies a 9x9 gaussian at the AO resolution.
+4. The PBR shader multiplies the ambient (indirect) term by the blurred value; direct
+   sun and point lights are deliberately not occluded. The forward pass then uses
+   `LessOrEqual` depth so it passes the prepass depth it re-renders into.
+
+The AO strength lives in `uEnvironment.w`, so the same switch also disables the
+multiply when the passes are skipped.
 
 ## Render targets
 
