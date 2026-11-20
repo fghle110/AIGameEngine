@@ -67,6 +67,9 @@ namespace aegis
 		layoutDesc.visibility = nvrhi::ShaderType::All;
 		layoutDesc.registerSpace = 0;
 		layoutDesc.registerSpaceIsDescriptorSet = true;
+		// NVRHI offsets sampler slots by 128 and constant buffers by 256 by default; the
+		// GLSL below uses plain 0-based bindings, so the offsets are pinned to zero.
+		layoutDesc.bindingOffsets = nvrhi::VulkanBindingOffsets{ 0, 0, 0, 0 };
 		layoutDesc.bindings = {
 			nvrhi::BindingLayoutItem::Texture_SRV(0),
 			nvrhi::BindingLayoutItem::Sampler(1),

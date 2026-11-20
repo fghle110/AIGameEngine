@@ -1,0 +1,191 @@
+#pragma once
+
+#include "Aegis/Assets/AssetHandle.h"
+#include "Aegis/Core/Base.h"
+#include "Aegis/Renderer/AssetCache.h"
+
+#include <glm/glm.hpp>
+#include <nvrhi/nvrhi.h>
+
+#include <array>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
+namespace aegis
+{
+	class Scene;
+
+	// The single shadow map shared by the directional light, and the number of point
+	// and spot lights the forward shader can evaluate at once.
+	inline constexpr u32 c_ShadowMapResolution = 2048;
+	inline constexpr u32 c_MaxSceneLights = 8;
+
+	// std140 mirrors of the blocks in Engine/Shaders/Scene*Constants.glsl. Only
+	// mat4/vec4/uvec4 members, so the C++ layout matches the GLSL layout exactly.
+	struct SceneLightConstants
+	{
+		glm::vec4 PositionRange{ 0.0f };
+		glm::vec4 ColorIntensity{ 0.0f };
+		glm::vec4 DirectionType{ 0.0f };
+		glm::vec4 SpotAngles{ 0.0f };
+	};
+
+	struct SceneObjectConstants
+	{
+		glm::mat4 Model{ 1.0f };
+		glm::vec4 BaseColorFactor{ 1.0f };
+		glm::vec4 MetallicRoughnessNormalOcclusion{ 0.0f };
+		glm::vec4 Emissive{ 0.0f };
+	};
+
+	struct SceneFrameConstants
+	{
+		glm::mat4 ViewProjection{ 1.0f };
+		glm::mat4 InvViewProjection{ 1.0f };
+		glm::mat4 LightViewProjection{ 1.0f };
+		glm::vec4 CameraPosition{ 0.0f };
+		glm::vec4 Ambient{ 0.0f };
+		glm::vec4 SunDirection{ 0.0f };
+		glm::vec4 SunColor{ 0.0f };
+		glm::vec4 PostProcess{ 1.0f };
+		glm::uvec4 LightCounts{ 0u };
+		std::array<SceneLightConstants, c_MaxSceneLights> Lights{};
+	};
+
+	// Push constant block of the tonemap pass.
+	struct ScenePostConstants
+	{
+		glm::vec4 PostProcess{ 1.0f };
+	};
+
+	static_assert(sizeof(SceneLightConstants) == 64, "SceneLightConstants must match the std140 layout");
+	static_assert(sizeof(SceneObjectConstants) == 112, "SceneObjectConstants must match the std140 layout");
+	static_assert(sizeof(SceneFrameConstants) == 800, "SceneFrameConstants must match the std140 layout");
+	static_assert(sizeof(ScenePostConstants) == 16, "ScenePostConstants must match the std140 layout");
+
+	struct SceneRendererStats
+	{
+		u32 VisibleMeshes = 0;
+		u32 DrawCalls = 0;
+		u32 ShadowDrawCalls = 0;
+		u32 PointLights = 0;
+		u32 Triangles = 0;
+	};
+
+	// Offscreen HDR scene renderer: a shadow map pass, a forward Cook-Torrance PBR
+	// pass into an RGBA16F target, and a post pass that applies exposure and ACES
+	// tonemapping into an sRGB texture an ImGui viewport can display.
+	//
+	// Render() records every pass into the command list it is given; the caller owns
+	// submission so the editor can draw its UI into the same submission.
+	class SceneRenderer final
+	{
+	public:
+		SceneRenderer() = default;
+		~SceneRenderer();
+
+		SceneRenderer(const SceneRenderer&) = delete;
+		SceneRenderer& operator=(const SceneRenderer&) = delete;
+
+		bool Initialize(nvrhi::IDevice* device);
+		void Shutdown();
+		bool IsInitialized() const { return m_Initialized; }
+
+		// Recreates the render targets; pipelines are sized independently and survive.
+		void Resize(u32 width, u32 height);
+
+		void Render(nvrhi::ICommandList* commandList, Scene& scene, const glm::mat4& viewProjection,
+			const glm::vec3& cameraPosition, const glm::mat4& lightViewProjection, bool renderShadows);
+
+		nvrhi::ITexture* GetFinalColor() const { return m_FinalColor.Get(); }
+		u32 GetWidth() const { return m_Width; }
+		u32 GetHeight() const { return m_Height; }
+
+		AssetCache& GetAssetCache() { return m_AssetCache; }
+		const AssetCache& GetAssetCache() const { return m_AssetCache; }
+		const SceneRendererStats& GetStats() const { return m_Stats; }
+
+		// Builds the light-space matrix for the scene's directional light, fitted to a
+		// box of shadowDistance around the camera. Scenes without a sun fall back to a
+		// fixed direction so Render() still has a usable matrix.
+		static glm::mat4 ComputeDirectionalShadowMatrix(const Scene& scene, const glm::vec3& cameraPosition,
+			f32 shadowDistance);
+
+	private:
+		struct DrawItem
+		{
+			const AssetCache::CachedMesh* Mesh = nullptr;
+			const Material* Material = nullptr;
+			glm::mat4 Model{ 1.0f };
+			u32 SubmeshIndex = 0;
+			bool CastShadows = true;
+			bool ReceiveShadows = true;
+		};
+
+		bool createBindingLayouts();
+		bool loadShaders();
+		bool createPipelines();
+		bool createShadowResources();
+		bool createFrameResources();
+		void releaseFrameResources();
+
+		void gatherDrawItems(Scene& scene, const glm::vec3& cameraPosition);
+		void fillFrameConstants(Scene& scene, const glm::mat4& viewProjection, const glm::vec3& cameraPosition,
+			const glm::mat4& lightViewProjection, bool renderShadows);
+		void recordShadowPass(nvrhi::ICommandList* commandList);
+		void recordSkyPass(nvrhi::ICommandList* commandList);
+		void recordForwardPass(nvrhi::ICommandList* commandList);
+		void recordPostPass(nvrhi::ICommandList* commandList);
+
+		nvrhi::IDevice* m_Device = nullptr;
+		AssetCache m_AssetCache;
+
+		nvrhi::BindingLayoutHandle m_FrameBindingLayout;
+		nvrhi::BindingLayoutHandle m_MaterialBindingLayout;
+		nvrhi::BindingLayoutHandle m_DepthBindingLayout;
+		nvrhi::BindingLayoutHandle m_PostBindingLayout;
+
+		nvrhi::ShaderHandle m_PbrVertexShader;
+		nvrhi::ShaderHandle m_PbrPixelShader;
+		nvrhi::ShaderHandle m_DepthVertexShader;
+		nvrhi::ShaderHandle m_FullscreenVertexShader;
+		nvrhi::ShaderHandle m_TonemapPixelShader;
+		nvrhi::ShaderHandle m_SkyPixelShader;
+
+		nvrhi::InputLayoutHandle m_SceneInputLayout;
+		nvrhi::InputLayoutHandle m_DepthInputLayout;
+
+		nvrhi::GraphicsPipelineHandle m_ShadowPipeline;
+		nvrhi::GraphicsPipelineHandle m_PbrPipeline;
+		nvrhi::GraphicsPipelineHandle m_TonemapPipeline;
+		nvrhi::GraphicsPipelineHandle m_SkyPipeline;
+
+		nvrhi::SamplerHandle m_ShadowSampler;
+		nvrhi::SamplerHandle m_HdrSampler;
+		nvrhi::BufferHandle m_FrameConstantBuffer;
+		nvrhi::BufferHandle m_DepthConstantBuffer;
+		nvrhi::BindingSetHandle m_FrameBindingSet;
+		nvrhi::BindingSetHandle m_DepthBindingSet;
+		nvrhi::BindingSetHandle m_PostBindingSet;
+
+		nvrhi::TextureHandle m_HdrColor;
+		nvrhi::TextureHandle m_DepthTexture;
+		nvrhi::TextureHandle m_FinalColor;
+		nvrhi::TextureHandle m_ShadowMap;
+
+		nvrhi::FramebufferHandle m_SceneFramebuffer;
+		nvrhi::FramebufferHandle m_ShadowFramebuffer;
+		nvrhi::FramebufferHandle m_PostFramebuffer;
+
+		std::vector<DrawItem> m_DrawItems;
+		// Entity names already reported for a missing mesh, so the warning appears once.
+		std::unordered_set<std::string> m_MissingMeshWarnings;
+		SceneFrameConstants m_FrameConstants;
+		SceneRendererStats m_Stats;
+
+		u32 m_Width = 1;
+		u32 m_Height = 1;
+		bool m_Initialized = false;
+	};
+}

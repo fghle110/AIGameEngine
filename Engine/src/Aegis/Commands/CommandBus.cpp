@@ -48,6 +48,12 @@ namespace aegis
 		return inserted;
 	}
 
+	bool CommandBus::Unregister(std::string_view name)
+	{
+		std::lock_guard lock(m_Mutex);
+		return m_Commands.erase(std::string(name)) > 0;
+	}
+
 	bool CommandBus::HasCommand(std::string_view name) const
 	{
 		std::lock_guard lock(m_Mutex);

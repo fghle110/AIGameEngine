@@ -1,13 +1,22 @@
 #include "Editor/EditorLayer.h"
 
 #include "Aegis.h"
+#include "Aegis/Assets/Material.h"
+#include "Aegis/Assets/Mesh.h"
+#include "Aegis/Assets/Texture.h"
 #include "Aegis/Core/Application.h"
 #include "Aegis/Core/Input.h"
 #include "Aegis/Core/KeyCodes.h"
 #include "Aegis/Events/ApplicationEvent.h"
+#include "Aegis/Audio/AudioEngine.h"
+#include "Aegis/Physics/PhysicsWorld.h"
 #include "Aegis/Renderer/ImGuiRenderer.h"
+#include "Aegis/Scripting/LuaEngine.h"
 #include "Aegis/Renderer/Renderer.h"
+#include "Aegis/Renderer/SceneRenderer.h"
+#include "Aegis/Scene/Camera.h"
 #include "Aegis/Scene/Entity.h"
+#include "Aegis/Serialization/SceneSerializer.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -179,13 +188,83 @@ namespace aegis
 			return;
 		}
 
+		m_SceneRenderer = CreateScope<SceneRenderer>();
+		if (!m_SceneRenderer->Initialize(m_Renderer->GetDevice()))
+		{
+			AE_CORE_ERROR("The scene renderer could not be initialized; the viewport keeps the grid overlay only");
+		}
+
 		m_AssetDirectory = FileSystem::ToUtf8(FileSystem::GetCurrentWorkingDirectory() / "Assets");
 		createDefaultScene();
+
+		m_Physics = CreateScope<PhysicsWorld>();
+		m_Physics->Initialize();
+		m_Audio = CreateScope<AudioEngine>();
+		m_Audio->Initialize();
+		m_Scripting = CreateScope<LuaEngine>();
+		m_Scripting->SetScriptRoot(FileSystem::GetCurrentWorkingDirectory() / "Scripts");
+		m_Scripting->SetAudioEngine(m_Audio.get());
+		m_Scripting->SetPhysicsWorld(m_Physics.get());
+		rebindSceneSystems();
+
+		startCommandServer();
 		AE_CORE_INFO("Editor ready");
+	}
+
+	AssetHandle EditorLayer::createBuiltinMeshHandle(PrimitiveType type) const
+	{
+		if (m_SceneRenderer == nullptr || !m_SceneRenderer->IsInitialized())
+		{
+			return AssetHandle{};
+		}
+		return m_SceneRenderer->GetAssetCache().GetBuiltinMesh(type);
+	}
+
+	AssetHandle EditorLayer::createMaterialAsset(const MaterialFactors& factors, const MaterialTextures& textures,
+		const char* name)
+	{
+		if (m_SceneRenderer == nullptr || !m_SceneRenderer->IsInitialized())
+		{
+			return AssetHandle{};
+		}
+
+		AssetCache& cache = m_SceneRenderer->GetAssetCache();
+		const Uuid id = Uuid::Generate();
+		if (cache.AddMaterial(id, factors, textures, name).IsNull())
+		{
+			return AssetHandle{};
+		}
+		return AssetHandle{ id, AssetType::Material };
+	}
+
+	Entity EditorLayer::createMeshEntity(const char* name, PrimitiveType primitive, const glm::vec3& position,
+		const glm::vec3& scale, const AssetHandle& material, const glm::vec3& rotationDegrees)
+	{
+		Entity entity = m_Scene->CreateEntity(name);
+
+		MeshRendererComponent renderer;
+		renderer.Mesh = createBuiltinMeshHandle(primitive);
+		if (material.IsValid())
+		{
+			renderer.Materials.push_back(material);
+		}
+		entity.AddComponent<MeshRendererComponent>(renderer);
+
+		TransformComponent& transform = entity.GetComponent<TransformComponent>();
+		transform.LocalPosition = position;
+		transform.LocalScale = scale;
+		transform.SetLocalEulerAngles(rotationDegrees);
+		return entity;
 	}
 
 	void EditorLayer::createDefaultScene()
 	{
+		if (m_Automation.DemoScene)
+		{
+			createDemoScene();
+			return;
+		}
+
 		m_Scene = CreateScope<Scene>("Untitled Scene");
 
 		Entity cameraEntity = m_Scene->CreateEntity("Main Camera");
@@ -204,15 +283,18 @@ namespace aegis
 		sunEntity.AddComponent<LightComponent>(sun);
 		sunEntity.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(-50.0f, 30.0f, 0.0f));
 
-		Entity groundEntity = m_Scene->CreateEntity("Ground");
-		MeshRendererComponent groundRenderer;
-		groundRenderer.CastShadows = false;
-		groundEntity.AddComponent<MeshRendererComponent>(groundRenderer);
-		groundEntity.GetComponent<TransformComponent>().LocalScale = glm::vec3(20.0f, 0.1f, 20.0f);
+		MaterialFactors groundFactors;
+		groundFactors.BaseColorFactor = glm::vec4(0.34f, 0.36f, 0.4f, 1.0f);
+		groundFactors.RoughnessFactor = 0.85f;
+		Entity groundEntity = createMeshEntity("Ground", PrimitiveType::Plane, glm::vec3(0.0f, 0.0f, 0.0f),
+			glm::vec3(20.0f, 1.0f, 20.0f), createMaterialAsset(groundFactors, MaterialTextures{}, "Ground"));
+		groundEntity.GetComponent<MeshRendererComponent>().CastShadows = false;
 
-		Entity boxEntity = m_Scene->CreateEntity("Box");
-		boxEntity.AddComponent<MeshRendererComponent>(MeshRendererComponent{});
-		boxEntity.GetComponent<TransformComponent>().LocalPosition = glm::vec3(0.0f, 1.0f, 0.0f);
+		MaterialFactors boxFactors;
+		boxFactors.BaseColorFactor = glm::vec4(0.72f, 0.42f, 0.18f, 1.0f);
+		boxFactors.RoughnessFactor = 0.45f;
+		Entity boxEntity = createMeshEntity("Box", PrimitiveType::Cube, glm::vec3(0.0f, 1.0f, 0.0f),
+			glm::vec3(1.0f), createMaterialAsset(boxFactors, MaterialTextures{}, "Box"));
 		RigidBodyComponent rigidBody;
 		rigidBody.Type = BodyType::Dynamic;
 		boxEntity.AddComponent<RigidBodyComponent>(rigidBody);
@@ -222,8 +304,256 @@ namespace aegis
 		m_Scene->UpdateTransforms();
 	}
 
+	void EditorLayer::createDemoScene()
+	{
+		m_Scene = CreateScope<Scene>("Demo Scene");
+
+		// Match the ambient fill to the procedural sky the background pass draws, so a
+		// fully metallic material reflects a visible environment instead of black.
+		EnvironmentSettings& environment = m_Scene->GetEnvironment();
+		environment.AmbientColor = glm::vec3(0.88f, 0.93f, 1.0f);
+		environment.AmbientIntensity = 0.85f;
+		environment.Exposure = 1.0f;
+		environment.EnableShadows = true;
+		environment.ShadowDistance = 40.0f;
+
+		Entity cameraEntity = m_Scene->CreateEntity("Main Camera");
+		CameraComponent camera;
+		camera.Primary = true;
+		camera.FieldOfView = 50.0f;
+		cameraEntity.AddComponent<CameraComponent>(camera);
+		TransformComponent& cameraTransform = cameraEntity.GetComponent<TransformComponent>();
+		cameraTransform.LocalPosition = glm::vec3(0.0f, 3.2f, 9.0f);
+		cameraTransform.SetLocalEulerAngles(glm::vec3(-14.0f, 0.0f, 0.0f));
+
+		Entity sunEntity = m_Scene->CreateEntity("Sun");
+		LightComponent sun;
+		sun.Type = LightType::Directional;
+		sun.Intensity = 4.0f;
+		sun.Color = glm::vec3(1.0f, 0.95f, 0.86f);
+		sun.CastShadows = true;
+		sunEntity.AddComponent<LightComponent>(sun);
+		sunEntity.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(-42.0f, 28.0f, 0.0f));
+
+		Entity pointEntity = m_Scene->CreateEntity("Point Light");
+		LightComponent point;
+		point.Type = LightType::Point;
+		point.Color = glm::vec3(1.0f, 0.45f, 0.2f);
+		point.Intensity = 30.0f;
+		point.Range = 14.0f;
+		pointEntity.AddComponent<LightComponent>(point);
+		pointEntity.GetComponent<TransformComponent>().LocalPosition = glm::vec3(3.4f, 2.4f, 1.2f);
+
+		// A checkerboard floor proves the texture path end to end; the primitives above
+		// it exercise the dielectric and metallic ends of the BRDF.
+		MaterialTextures floorTextures;
+		if (m_SceneRenderer != nullptr && m_SceneRenderer->IsInitialized())
+		{
+			AssetCache& cache = m_SceneRenderer->GetAssetCache();
+			const Image checkerboard = Image::CreateCheckerboard(256, 256, 32, glm::vec3(0.40f, 0.41f, 0.44f),
+				glm::vec3(0.14f, 0.15f, 0.17f));
+			const Uuid textureId = Uuid::Generate();
+			if (!cache.AddTexture(textureId, checkerboard, SamplerSettings::Albedo()).IsNull())
+			{
+				floorTextures.Albedo = cache.GetTexture(textureId);
+			}
+		}
+
+		MaterialFactors floorFactors;
+		floorFactors.BaseColorFactor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		floorFactors.RoughnessFactor = 0.8f;
+		const AssetHandle floorMaterial = createMaterialAsset(floorFactors, floorTextures, "Checkered Floor");
+		// The floor plane is a single-sided surface seen from above, so it must not try
+		// to cast a shadow into itself.
+		Entity floorEntity = createMeshEntity("Floor", PrimitiveType::Plane, glm::vec3(0.0f, 0.0f, 0.0f),
+			glm::vec3(24.0f, 1.0f, 24.0f), floorMaterial);
+		floorEntity.GetComponent<MeshRendererComponent>().CastShadows = false;
+
+		MaterialFactors paintedFactors;
+		paintedFactors.BaseColorFactor = glm::vec4(0.85f, 0.22f, 0.18f, 1.0f);
+		paintedFactors.RoughnessFactor = 0.32f;
+		const AssetHandle paintedMaterial = createMaterialAsset(paintedFactors, MaterialTextures{}, "Painted Red");
+
+		MaterialFactors goldFactors;
+		goldFactors.BaseColorFactor = glm::vec4(1.0f, 0.78f, 0.35f, 1.0f);
+		goldFactors.MetallicFactor = 1.0f;
+		goldFactors.RoughnessFactor = 0.22f;
+		const AssetHandle goldMaterial = createMaterialAsset(goldFactors, MaterialTextures{}, "Polished Gold");
+
+		MaterialFactors ceramicFactors;
+		ceramicFactors.BaseColorFactor = glm::vec4(0.18f, 0.32f, 0.85f, 1.0f);
+		ceramicFactors.RoughnessFactor = 0.12f;
+		const AssetHandle ceramicMaterial = createMaterialAsset(ceramicFactors, MaterialTextures{}, "Glazed Blue");
+
+		MaterialFactors grassFactors;
+		grassFactors.BaseColorFactor = glm::vec4(0.24f, 0.62f, 0.32f, 1.0f);
+		grassFactors.RoughnessFactor = 0.55f;
+		const AssetHandle grassMaterial = createMaterialAsset(grassFactors, MaterialTextures{}, "Green Plastic");
+
+		createMeshEntity("Red Cube", PrimitiveType::Cube, glm::vec3(-2.1f, 0.5f, 0.4f), glm::vec3(1.0f),
+			paintedMaterial, glm::vec3(0.0f, 20.0f, 0.0f));
+		createMeshEntity("Gold Cube", PrimitiveType::Cube, glm::vec3(0.1f, 0.7f, -1.1f),
+			glm::vec3(1.4f), goldMaterial, glm::vec3(0.0f, -12.0f, 0.0f));
+		createMeshEntity("Blue Sphere", PrimitiveType::Sphere, glm::vec3(2.2f, 0.6f, 0.5f),
+			glm::vec3(1.2f), ceramicMaterial);
+		createMeshEntity("Green Cylinder", PrimitiveType::Cylinder, glm::vec3(-1.4f, 0.75f, -2.3f),
+			glm::vec3(0.9f, 1.5f, 0.9f), grassMaterial);
+
+		m_Scene->EnsurePrimaryCamera();
+		m_Scene->UpdateTransforms();
+	}
+
+	void EditorLayer::startCommandServer()
+	{
+		if (m_CommandServerStarted || m_Scene == nullptr)
+		{
+			return;
+		}
+
+		m_CommandContext.Scene = m_Scene.get();
+		m_CommandContext.Selection = &m_SelectedEntity;
+		m_CommandContext.Renderer = m_Renderer.get();
+		m_CommandContext.ProjectRoot = FileSystem::ToUtf8(FileSystem::GetCurrentWorkingDirectory());
+		m_CommandContext.ScreenshotRequest = [this](const std::string& path)
+		{
+			if (m_Renderer != nullptr)
+			{
+				m_Renderer->RequestScreenshot(path);
+			}
+		};
+		m_CommandContext.SaveScene = [this](std::string* error)
+		{
+			const std::string path = m_ScenePath.empty() ? "Saved/EditorScene.aescene" : m_ScenePath;
+			return saveSceneToFile(path, error);
+		};
+		m_CommandContext.LoadScene = [this](const std::string& path, std::string* error)
+		{
+			return loadSceneFromFile(path, error);
+		};
+
+		RegisterEditorCommands(m_CommandContext);
+		m_CommandServerStarted = m_CommandServer.Start(c_DefaultCommandPort);
+		if (m_CommandServerStarted)
+		{
+			AE_CORE_INFO("Editor command API listening on 127.0.0.1:{}", m_CommandServer.GetPort());
+		}
+		else
+		{
+			AE_CORE_ERROR("Could not start the editor command API on port {}", c_DefaultCommandPort);
+		}
+	}
+
+	void EditorLayer::stopCommandServer()
+	{
+		if (!m_CommandServerStarted)
+		{
+			return;
+		}
+		m_CommandServer.Stop();
+		m_CommandServerStarted = false;
+	}
+
+	bool EditorLayer::saveSceneToFile(const std::string& path, std::string* error)
+	{
+		if (m_Scene == nullptr)
+		{
+			if (error != nullptr)
+			{
+				*error = "No scene is open";
+			}
+			return false;
+		}
+		if (!SceneSerializer::Save(*m_Scene, FileSystem::FromUtf8(path)))
+		{
+			if (error != nullptr)
+			{
+				*error = std::format("Could not save the scene to '{}'", path);
+			}
+			return false;
+		}
+		m_ScenePath = path;
+		if (error != nullptr)
+		{
+			*error = path;
+		}
+		AE_CORE_INFO("Scene saved to '{}'", path);
+		return true;
+	}
+
+	bool EditorLayer::loadSceneFromFile(const std::string& path, std::string* error)
+	{
+		auto scene = CreateScope<Scene>();
+		std::string loadError;
+		if (!SceneSerializer::Load(*scene, FileSystem::FromUtf8(path), &loadError))
+		{
+			if (error != nullptr)
+			{
+				*error = loadError;
+			}
+			return false;
+		}
+		m_Scene = std::move(scene);
+		m_ScenePath = path;
+		m_SelectedEntity = Uuid::Null();
+		rebindSceneSystems();
+		AE_CORE_INFO("Scene loaded from '{}'", path);
+		return true;
+	}
+
+	void EditorLayer::rebindSceneSystems()
+	{
+		if (m_Scene == nullptr)
+		{
+			return;
+		}
+		const bool sceneChanged = m_BoundScene != nullptr && m_BoundScene != m_Scene.get();
+		m_BoundScene = m_Scene.get();
+		m_CommandContext.Scene = m_Scene.get();
+
+		if (m_Scripting != nullptr)
+		{
+			if (sceneChanged)
+			{
+				m_Scripting->Shutdown();
+			}
+			m_Scripting->Initialize(*m_Scene);
+			m_Scene->AddSystem(m_Scripting.get());
+		}
+		if (m_Physics != nullptr)
+		{
+			m_Scene->AddSystem(m_Physics.get());
+		}
+		if (m_Audio != nullptr)
+		{
+			m_Scene->AddSystem(m_Audio.get());
+		}
+	}
+
 	void EditorLayer::OnDetach()
 	{
+		stopCommandServer();
+		if (m_Scene != nullptr)
+		{
+			m_Scene->RemoveSystem(m_Physics.get());
+			m_Scene->RemoveSystem(m_Scripting.get());
+			m_Scene->RemoveSystem(m_Audio.get());
+		}
+		if (m_Scripting != nullptr)
+		{
+			m_Scripting->Shutdown();
+		}
+		if (m_Audio != nullptr)
+		{
+			m_Audio->Shutdown();
+		}
+		if (m_Physics != nullptr)
+		{
+			m_Physics->Shutdown();
+		}
+		m_Scripting = nullptr;
+		m_Audio = nullptr;
+		m_Physics = nullptr;
+		m_SceneRenderer = nullptr;
 		m_ImGui = nullptr;
 		m_Renderer = nullptr;
 		m_Scene = nullptr;
@@ -234,6 +564,14 @@ namespace aegis
 		if (m_Scene == nullptr || m_Renderer == nullptr)
 		{
 			return;
+		}
+		if (m_CommandServerStarted)
+		{
+			m_CommandServer.ProcessPending();
+		}
+		if (m_BoundScene != m_Scene.get())
+		{
+			rebindSceneSystems();
 		}
 		handleShortcuts();
 		m_Scene->OnUpdate(timestep);
@@ -303,6 +641,9 @@ namespace aegis
 			{
 				m_Renderer->RequestScreenshot(m_Automation.ScreenshotPath);
 			}
+			// The scene renders into its offscreen targets first; ImGui then composites
+			// the viewport image and the rest of the UI over the swapchain image.
+			renderScene(commandList);
 			m_ImGui->Render(commandList, m_Renderer->GetFramebuffer(), static_cast<f32>(m_Renderer->GetWidth()),
 				static_cast<f32>(m_Renderer->GetHeight()));
 			m_Renderer->EndFrame();
@@ -949,6 +1290,54 @@ namespace aegis
 		ImGui::EndPopup();
 	}
 
+	glm::mat4 EditorLayer::computeViewProjection(f32 aspectRatio, glm::vec3& outCameraPosition) const
+	{
+		outCameraPosition = m_EditorCamera.GetPosition();
+		if (m_UseSceneCamera && m_Scene != nullptr)
+		{
+			const Entity primaryCamera = m_Scene->GetPrimaryCamera();
+			if (primaryCamera.IsValid() && primaryCamera.HasComponent<CameraComponent>() &&
+				primaryCamera.HasComponent<TransformComponent>())
+			{
+				const CameraComponent& cameraComponent = primaryCamera.GetComponent<CameraComponent>();
+				const TransformComponent& cameraTransform = primaryCamera.GetComponent<TransformComponent>();
+				outCameraPosition = cameraTransform.WorldPosition;
+				return Camera::ComputeProjection(cameraComponent, aspectRatio) * Camera::ComputeView(cameraTransform);
+			}
+		}
+		return m_EditorCamera.GetViewProjection(aspectRatio);
+	}
+
+	void EditorLayer::renderScene(nvrhi::ICommandList* commandList)
+	{
+		if (m_SceneRenderer == nullptr || !m_SceneRenderer->IsInitialized() || m_Scene == nullptr ||
+			m_ImGui == nullptr || commandList == nullptr)
+		{
+			return;
+		}
+
+		const u32 width = m_SceneRenderer->GetWidth();
+		const u32 height = m_SceneRenderer->GetHeight();
+		if (width != m_RegisteredViewportWidth || height != m_RegisteredViewportHeight)
+		{
+			// Resizing recreates the output texture, so ImGui needs a fresh binding set.
+			m_ImGui->RegisterTexture(static_cast<ImTextureID>(m_ViewportTextureId),
+				m_SceneRenderer->GetFinalColor());
+			m_RegisteredViewportWidth = width;
+			m_RegisteredViewportHeight = height;
+		}
+
+		const f32 aspect = static_cast<f32>(width) / static_cast<f32>(height);
+		glm::vec3 cameraPosition = m_EditorCamera.GetPosition();
+		const glm::mat4 viewProjection = computeViewProjection(aspect, cameraPosition);
+
+		const EnvironmentSettings& environment = m_Scene->GetEnvironment();
+		const glm::mat4 lightViewProjection = SceneRenderer::ComputeDirectionalShadowMatrix(*m_Scene,
+			cameraPosition, environment.ShadowDistance);
+		m_SceneRenderer->Render(commandList, *m_Scene, viewProjection, cameraPosition, lightViewProjection,
+			environment.EnableShadows);
+	}
+
 	void EditorLayer::drawViewport()
 	{
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -970,33 +1359,95 @@ namespace aegis
 
 		const ImVec2 origin = ImGui::GetCursorScreenPos();
 		const ImVec2 size(available.x, available.y);
+		const u32 targetWidth = static_cast<u32>(Max(available.x, 1.0f));
+		const u32 targetHeight = static_cast<u32>(Max(available.y, 1.0f));
+		// Integer target dimensions drive the aspect ratio so the grid and gizmos line
+		// up with the rendered pixels exactly.
+		const f32 aspect = static_cast<f32>(targetWidth) / static_cast<f32>(targetHeight);
+
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		drawList->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(16, 18, 24, 255));
+		drawList->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(12, 14, 19, 255));
+
+		const bool hasSceneRenderer = m_SceneRenderer != nullptr && m_SceneRenderer->IsInitialized();
+		if (hasSceneRenderer && size.x > 1.0f && size.y > 1.0f)
+		{
+			// Size the offscreen targets to the viewport before recording the frame.
+			m_SceneRenderer->Resize(targetWidth, targetHeight);
+			ImGui::Image(static_cast<ImTextureID>(m_ViewportTextureId), size);
+		}
+
+		const Entity primaryCamera = m_Scene != nullptr ? m_Scene->GetPrimaryCamera() : Entity();
+		const bool hasSceneCamera = primaryCamera.IsValid() && primaryCamera.HasComponent<CameraComponent>() &&
+			primaryCamera.HasComponent<TransformComponent>();
+		glm::vec3 cameraPosition = m_EditorCamera.GetPosition();
+		const glm::mat4 viewProjection = computeViewProjection(aspect, cameraPosition);
 
 		if (size.x > 1.0f && size.y > 1.0f)
 		{
-			const f32 aspect = size.x / size.y;
-			const glm::mat4 viewProjection = m_EditorCamera.GetViewProjection(aspect);
 			drawViewportGrid(viewProjection, glm::vec2(origin.x, origin.y), glm::vec2(size.x, size.y));
 			drawViewportGizmos(viewProjection, glm::vec2(origin.x, origin.y), glm::vec2(size.x, size.y));
 
 			char overlay[256];
-			std::snprintf(overlay, sizeof(overlay), "Perspective | %.0f fps | pos %.1f %.1f %.1f", 
+			std::snprintf(overlay, sizeof(overlay), "%s | %.0f fps | pos %.1f %.1f %.1f",
+				m_UseSceneCamera && hasSceneCamera ? "Scene camera" : "Editor camera",
 				Application::Get() != nullptr ? Application::Get()->GetFramesPerSecond() : 0.0f,
-				m_EditorCamera.GetPosition().x, m_EditorCamera.GetPosition().y, m_EditorCamera.GetPosition().z);
-			drawList->AddText(ImVec2(origin.x + 10.0f, origin.y + 8.0f), IM_COL32(190, 195, 200, 220), overlay);
+				cameraPosition.x, cameraPosition.y, cameraPosition.z);
+			const f32 textWidth = ImGui::CalcTextSize(overlay).x;
+			drawList->AddText(ImVec2(origin.x + Max(size.x - textWidth - 12.0f, 8.0f), origin.y + 10.0f),
+				IM_COL32(200, 205, 212, 220), overlay);
 		}
 
+		// Toolbar overlay: pick which camera drives the viewport.
+		ImGui::SetCursorScreenPos(ImVec2(origin.x + 8.0f, origin.y + 8.0f));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(14, 16, 21, 205));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 5.0f));
+		const bool toolbarOpen = ImGui::BeginChild("##ViewportToolbar", ImVec2(0.0f, 0.0f),
+			ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+		if (toolbarOpen)
+		{
+			if (ImGui::RadioButton("Editor Camera", !m_UseSceneCamera || !hasSceneCamera))
+			{
+				m_UseSceneCamera = false;
+			}
+			ImGui::SameLine();
+			ImGui::BeginDisabled(!hasSceneCamera);
+			if (ImGui::RadioButton("Scene Camera", m_UseSceneCamera && hasSceneCamera))
+			{
+				m_UseSceneCamera = true;
+			}
+			ImGui::EndDisabled();
+		}
+		ImGui::EndChild();
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor();
+
 		// Clicking in the viewport selects the closest entity under the cursor.
-		if (m_ViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && size.x > 1.0f)
+		if (m_ViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && size.x > 1.0f &&
+			!ImGui::IsAnyItemHovered())
 		{
 			const ImVec2 mouse = ImGui::GetIO().MousePos;
-			const f32 ndcX = ((mouse.x - origin.x) / size.x) * 2.0f - 1.0f;
-			const f32 ndcY = 1.0f - ((mouse.y - origin.y) / size.y) * 2.0f;
-			const f32 aspect = size.x / size.y;
-			const f32 tanHalfFov = std::tan(glm::radians(m_EditorCamera.GetFieldOfView()) * 0.5f);
-			const glm::vec3 direction = glm::normalize(m_EditorCamera.GetForward() +
-				m_EditorCamera.GetRight() * (ndcX * tanHalfFov * aspect) + m_EditorCamera.GetUp() * (ndcY * tanHalfFov));
+			const glm::vec2 viewportPosition((mouse.x - origin.x) / size.x, (mouse.y - origin.y) / size.y);
+
+			glm::vec3 rayOrigin = cameraPosition;
+			glm::vec3 rayDirection = m_EditorCamera.GetForward();
+			if (m_UseSceneCamera && hasSceneCamera)
+			{
+				const CameraComponent& cameraComponent = primaryCamera.GetComponent<CameraComponent>();
+				const TransformComponent& cameraTransform = primaryCamera.GetComponent<TransformComponent>();
+				Camera::ComputeRay(cameraTransform, cameraComponent, aspect, viewportPosition, rayOrigin,
+					rayDirection);
+			}
+			else
+			{
+				const f32 ndcX = viewportPosition.x * 2.0f - 1.0f;
+				const f32 ndcY = 1.0f - viewportPosition.y * 2.0f;
+				const f32 tanHalfFov = std::tan(glm::radians(m_EditorCamera.GetFieldOfView()) * 0.5f);
+				rayDirection = glm::normalize(m_EditorCamera.GetForward() +
+					m_EditorCamera.GetRight() * (ndcX * tanHalfFov * aspect) +
+					m_EditorCamera.GetUp() * (ndcY * tanHalfFov));
+			}
 
 			Uuid closest;
 			f32 closestDistance = 1.0e30f;
@@ -1022,7 +1473,7 @@ namespace aegis
 				const glm::mat4 world = transform.GetWorldTransform();
 				const glm::mat4 worldToLocal = glm::inverse(world);
 				f32 distance = 0.0f;
-				if (RayIntersectsAabb(m_EditorCamera.GetPosition(), direction, worldToLocal, halfExtents, distance) &&
+				if (RayIntersectsAabb(rayOrigin, rayDirection, worldToLocal, halfExtents, distance) &&
 					distance < closestDistance)
 				{
 					closestDistance = distance;
@@ -1033,6 +1484,7 @@ namespace aegis
 		}
 
 		// Reserve the whole area so the viewport behaves like a real child window.
+		ImGui::SetCursorScreenPos(origin);
 		ImGui::Dummy(ImVec2(size.x, size.y));
 		ImGui::End();
 	}
@@ -1248,6 +1700,15 @@ namespace aegis
 			m_EditorCamera.GetPosition().z);
 		ImGui::Text("Selected: %s", GetSelectedEntity().IsValid() ? GetSelectedEntity().GetName().c_str() : "none");
 		ImGui::Separator();
+		if (m_SceneRenderer != nullptr && m_SceneRenderer->IsInitialized())
+		{
+			const SceneRendererStats& stats = m_SceneRenderer->GetStats();
+			ImGui::Text("Draw calls: %u (+%u shadow)", stats.DrawCalls, stats.ShadowDrawCalls);
+			ImGui::Text("Visible meshes: %u", stats.VisibleMeshes);
+			ImGui::Text("Triangles: %u", stats.Triangles);
+			ImGui::Text("Point lights: %u / %u", stats.PointLights, c_MaxSceneLights);
+			ImGui::Separator();
+		}
 		ImGui::Text("Warnings: %llu", static_cast<unsigned long long>(Log::GetMessageCount(LogLevel::Warn)));
 		ImGui::Text("Errors: %llu", static_cast<unsigned long long>(Log::GetMessageCount(LogLevel::Error)));
 		ImGui::End();
@@ -1337,7 +1798,12 @@ namespace aegis
 
 		if (control && Input::IsKeyPressed(KeyCode::S))
 		{
-			AE_CORE_INFO("Scene saving is wired through the command bus ({})", c_SceneExtension);
+			const std::string path = m_ScenePath.empty() ? "Saved/EditorScene.aescene" : m_ScenePath;
+			std::string error;
+			if (!saveSceneToFile(path, &error))
+			{
+				AE_CORE_ERROR("{}", error);
+			}
 		}
 		if (control && Input::IsKeyPressed(KeyCode::N))
 		{

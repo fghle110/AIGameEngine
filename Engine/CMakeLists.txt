@@ -69,6 +69,10 @@ if(MSVC)
     target_compile_definitions(Aegis PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-ae_add_shaders(Aegis FILES ImGui.vert ImGui.frag)
+ae_add_shaders(Aegis FILES
+    ImGui.vert ImGui.frag
+    SceneDepthOnly.vert
+    ScenePbr.vert ScenePbr.frag
+    ScenePost.vert SceneTonemap.frag SceneSky.frag)
 
 ae_apply_warnings(Aegis)

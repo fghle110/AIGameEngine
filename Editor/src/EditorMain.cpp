@@ -12,6 +12,7 @@ namespace
 		std::printf("Aegis Editor\n");
 		std::printf("  --frames <n>          render n frames and quit (self-test)\n");
 		std::printf("  --screenshot <path>   capture the final frame to a PNG\n");
+		std::printf("  --demo                load the primitive demo scene (PBR, shadows, tonemap)\n");
 	}
 }
 
@@ -30,6 +31,10 @@ int main(int argc, char** argv)
 		else if (argument == "--screenshot" && i + 1 < argc)
 		{
 			automation.ScreenshotPath = argv[++i];
+		}
+		else if (argument == "--demo")
+		{
+			automation.DemoScene = true;
 		}
 		else if (argument == "--help" || argument == "-h")
 		{

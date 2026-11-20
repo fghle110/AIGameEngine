@@ -1,9 +1,12 @@
 #pragma once
 
+#include "Aegis/Assets/AssetHandle.h"
 #include "Aegis/Core/Layer.h"
 #include "Aegis/Core/Uuid.h"
 #include "Aegis/Scene/Scene.h"
+#include "Aegis/Commands/HttpServer.h"
 #include "Editor/EditorCamera.h"
+#include "Editor/EditorCommands.h"
 
 #include <glm/glm.hpp>
 
@@ -11,11 +14,23 @@
 
 struct ImVec2;
 
+namespace nvrhi
+{
+	class ICommandList;
+}
+
 namespace aegis
 {
 	class Renderer;
 	class ImGuiRenderer;
+	class SceneRenderer;
 	class Entity;
+	class PhysicsWorld;
+	class AudioEngine;
+	class LuaEngine;
+	enum class PrimitiveType : u8;
+	struct MaterialFactors;
+	struct MaterialTextures;
 
 	// Command line driven automation used by the AI tooling and the self-test:
 	// render a number of frames, optionally capture a screenshot, then quit.
@@ -23,6 +38,10 @@ namespace aegis
 	{
 		i32 Frames = 0;
 		std::string ScreenshotPath;
+		// Builds the primitive demo scene (plane, cubes, sphere, cylinder, a sun and a
+		// point light) instead of the empty default scene, so a screenshot proves the
+		// PBR, shadow and tonemap path without any external asset.
+		bool DemoScene = false;
 	};
 
 	// The editor shell: dockspace, panels, menus and the frame that renders the
@@ -45,6 +64,15 @@ namespace aegis
 
 	private:
 		void createDefaultScene();
+		void createDemoScene();
+		AssetHandle createMaterialAsset(const MaterialFactors& factors, const MaterialTextures& textures,
+			const char* name);
+		AssetHandle createBuiltinMeshHandle(PrimitiveType type) const;
+		Entity createMeshEntity(const char* name, PrimitiveType primitive, const glm::vec3& position,
+			const glm::vec3& scale, const AssetHandle& material, const glm::vec3& rotationDegrees = glm::vec3(0.0f));
+		void renderScene(nvrhi::ICommandList* commandList);
+		glm::mat4 computeViewProjection(f32 aspectRatio, glm::vec3& outCameraPosition) const;
+		u64 viewportTextureId() const { return m_ViewportTextureId; }
 		void drawMenuBar();
 		void drawDockspace();
 		void buildDefaultLayout(u32 dockspaceId);
@@ -67,9 +95,33 @@ namespace aegis
 		void handleShortcuts();
 		void drawAutomationFooter();
 
+		// Command API: the same handlers back the UI and the AI HTTP server.
+		void startCommandServer();
+		void stopCommandServer();
+		bool saveSceneToFile(const std::string& path, std::string* error);
+		bool loadSceneFromFile(const std::string& path, std::string* error);
+		void rebindSceneSystems();
+
 		Scope<Scene> m_Scene;
 		Scope<Renderer> m_Renderer;
+		Scope<SceneRenderer> m_SceneRenderer;
 		Scope<ImGuiRenderer> m_ImGui;
+
+		Scope<PhysicsWorld> m_Physics;
+		Scope<AudioEngine> m_Audio;
+		Scope<LuaEngine> m_Scripting;
+
+		HttpServer m_CommandServer;
+		EditorCommandContext m_CommandContext;
+		Scene* m_BoundScene = nullptr;
+		bool m_CommandServerStarted = false;
+
+		// The viewport image always uses texture id 2 (id 1 is ImGui's font atlas) and
+		// is re-registered when the scene renderer recreates its output texture.
+		u64 m_ViewportTextureId = 2;
+		u32 m_RegisteredViewportWidth = 0;
+		u32 m_RegisteredViewportHeight = 0;
+		bool m_UseSceneCamera = false;
 
 		EditorCamera m_EditorCamera;
 		EditorAutomationOptions m_Automation;

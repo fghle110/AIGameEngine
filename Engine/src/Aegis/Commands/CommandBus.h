@@ -64,6 +64,9 @@ namespace aegis
 		static CommandBus& Get();
 
 		bool Register(CommandInfo info, Handler handler);
+		// Removes a command. Re-registering an editor command set uses this so the
+		// handlers always reference the current editor context.
+		bool Unregister(std::string_view name);
 		bool HasCommand(std::string_view name) const;
 
 		CommandResult Execute(std::string_view name, const JsonValue& parameters = JsonValue());
