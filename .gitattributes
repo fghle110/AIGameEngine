@@ -1,0 +1,19 @@
+* text=auto eol=lf
+*.hlsl text
+*.glsl text
+*.lua text
+*.json text
+*.cpp text
+*.h text
+*.cmake text
+CMakeLists.txt text
+*.png binary
+*.jpg binary
+*.hdr binary
+*.exr binary
+*.ktx2 binary
+*.spv binary
+*.wav binary
+*.ogg binary
+*.glb binary
+*.aemesh binary
