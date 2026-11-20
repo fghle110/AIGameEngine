@@ -4,6 +4,7 @@
 #include "Aegis/Core/Json.h"
 #include "Aegis/Core/Log.h"
 #include "Aegis/Project/Project.h"
+#include "Aegis/Renderer/AssetCache.h"
 #include "Aegis/Scene/Scene.h"
 #include "Aegis/Serialization/SceneSerializer.h"
 
@@ -18,9 +19,12 @@ namespace aegis::demo
 			return entity;
 		}
 
-		void AddMesh(Entity entity, bool castShadows = true)
+		void AddMesh(Entity entity, PrimitiveType primitive, bool castShadows = true)
 		{
 			MeshRendererComponent renderer;
+			// Built-in primitives have stable UUIDs, so the exported project renders the
+			// real shapes without shipping any mesh files.
+			renderer.Mesh = AssetHandle{ AssetCache::GetBuiltinMeshUuid(primitive), AssetType::Mesh };
 			renderer.CastShadows = castShadows;
 			renderer.Visible = true;
 			entity.AddComponent<MeshRendererComponent>(renderer);
@@ -93,7 +97,7 @@ namespace aegis::demo
 		spotLight.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(-65.0f, 0.0f, 0.0f));
 
 		Entity ground = CreateEntity(scene, "Ground", glm::vec3(0.0f, -0.1f, 0.0f));
-		AddMesh(ground, false);
+		AddMesh(ground, PrimitiveType::Plane, false);
 		ground.GetComponent<TransformComponent>().LocalScale = glm::vec3(30.0f, 0.2f, 30.0f);
 		RigidBodyComponent groundBody;
 		groundBody.Type = BodyType::Static;
@@ -105,7 +109,7 @@ namespace aegis::demo
 		ground.AddComponent<ColliderComponent>(groundCollider);
 
 		Entity fallingCube = CreateEntity(scene, "Falling Cube", glm::vec3(0.0f, 4.0f, 0.0f));
-		AddMesh(fallingCube);
+		AddMesh(fallingCube, PrimitiveType::Cube);
 		RigidBodyComponent cubeBody;
 		cubeBody.Type = BodyType::Dynamic;
 		cubeBody.Mass = 1.5f;
@@ -124,7 +128,7 @@ namespace aegis::demo
 		fallingCube.AddComponent<LuaScriptComponent>(cubeScript);
 
 		Entity sphere = CreateEntity(scene, "Sphere", glm::vec3(2.2f, 1.0f, 0.0f));
-		AddMesh(sphere);
+		AddMesh(sphere, PrimitiveType::Sphere);
 		RigidBodyComponent sphereBody;
 		sphereBody.Type = BodyType::Dynamic;
 		sphereBody.Mass = 0.8f;
@@ -138,7 +142,7 @@ namespace aegis::demo
 		parent.GetComponent<TransformComponent>().SetLocalEulerAngles(glm::vec3(0.0f, 25.0f, 0.0f));
 		Entity child = CreateEntity(scene, "Rig Child", glm::vec3(0.0f, 2.0f, 0.0f));
 		child.SetParent(parent);
-		AddMesh(child, false);
+		AddMesh(child, PrimitiveType::Cylinder, false);
 
 		Entity audio = CreateEntity(scene, "Ambience", glm::vec3(0.0f, 2.0f, 0.0f));
 		AudioSourceComponent source;
@@ -149,7 +153,7 @@ namespace aegis::demo
 		audio.AddComponent<AudioSourceComponent>(source);
 
 		Entity trigger = CreateEntity(scene, "Trigger Volume", glm::vec3(0.0f, 1.0f, -3.0f));
-		AddMesh(trigger, false);
+		AddMesh(trigger, PrimitiveType::Cube, false);
 		RigidBodyComponent triggerBody;
 		triggerBody.Type = BodyType::Static;
 		trigger.AddComponent<RigidBodyComponent>(triggerBody);

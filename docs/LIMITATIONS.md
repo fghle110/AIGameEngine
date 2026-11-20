@@ -64,7 +64,8 @@ is listed, the engine either ignores the corresponding setting or does not expos
 - Skinned meshes and animation clips are not imported from glTF; static meshes only.
 - Audio clips are registered at runtime (`AudioEngine::RegisterClip`) or resolved through
   the Lua script root convention; there is no editor asset pipeline for audio yet.
-- The feature project references the built-in primitives as fallbacks when a mesh asset is
-  not loaded: the runtime renders them with the default material and logs one warning per
-  entity. Materials are authored through the editor command API in this milestone.
+- The feature project now references the built-in primitives through their stable UUIDs, so
+  the exported runtime renders the real cube/plane/sphere/cylinder. It still uses the default
+  material everywhere: material assets are authored in the editor / through the command API,
+  and the scene format can reference them, but no material files ship with the sample project.
 - Single window, single Vulkan device per process; ImGui multi-viewport is not enabled.

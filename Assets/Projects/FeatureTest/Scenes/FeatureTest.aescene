@@ -52,7 +52,7 @@
                     1
                 ]
             },
-            "uuid": "0140dfcf-4a9e-4015-b0df-09c68e5e877c"
+            "uuid": "7a528399-6e3b-4380-8194-a9dd4d805d17"
         },
         {
             "active": true,
@@ -90,7 +90,7 @@
                     1
                 ]
             },
-            "uuid": "a5eac54e-34d0-4cb7-928c-d0c62e18bf70"
+            "uuid": "177bc3fb-f1c3-4232-8ec2-804638ee6319"
         },
         {
             "active": true,
@@ -128,7 +128,7 @@
                     1
                 ]
             },
-            "uuid": "470ecc96-b01f-4cb0-9bcd-6dc01b4f7af3"
+            "uuid": "7f842c1c-fd68-4a24-b79a-41af5b88c862"
         },
         {
             "active": true,
@@ -166,7 +166,7 @@
                     1
                 ]
             },
-            "uuid": "49819ac4-5be0-4c85-9c09-bcbd5838e4f4"
+            "uuid": "8de182eb-763a-402a-aa1f-e2478656d527"
         },
         {
             "active": true,
@@ -190,8 +190,8 @@
                 "castShadows": false,
                 "materials": [],
                 "mesh": {
-                    "id": null,
-                    "type": "none"
+                    "id": "00000000-0000-4000-8000-000000000002",
+                    "type": "mesh"
                 },
                 "receiveShadows": true,
                 "visible": true
@@ -226,7 +226,7 @@
                     30
                 ]
             },
-            "uuid": "fe7604a8-125f-4d58-a6b9-913b4221790a"
+            "uuid": "96cc09c3-4de5-41b9-9dfb-e9aa5f54b112"
         },
         {
             "active": true,
@@ -253,7 +253,7 @@
                     "speed": 45
                 },
                 "script": {
-                    "id": "b866f36e-64be-4357-987d-def5e8609b67",
+                    "id": "5f9399fc-12fe-4c83-87bb-e0b407a24765",
                     "type": "script"
                 }
             },
@@ -261,8 +261,8 @@
                 "castShadows": true,
                 "materials": [],
                 "mesh": {
-                    "id": null,
-                    "type": "none"
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "type": "mesh"
                 },
                 "receiveShadows": true,
                 "visible": true
@@ -297,7 +297,7 @@
                     1
                 ]
             },
-            "uuid": "ce2ebbbb-4a24-428c-b639-aea074bdeeeb"
+            "uuid": "f588d371-5d55-4e8f-a70e-50d016ca886f"
         },
         {
             "active": true,
@@ -321,8 +321,8 @@
                 "castShadows": true,
                 "materials": [],
                 "mesh": {
-                    "id": null,
-                    "type": "none"
+                    "id": "00000000-0000-4000-8000-000000000003",
+                    "type": "mesh"
                 },
                 "receiveShadows": true,
                 "visible": true
@@ -357,14 +357,14 @@
                     1
                 ]
             },
-            "uuid": "0603bbbe-c3b6-4d3c-a505-3af9b3af88c9"
+            "uuid": "14affcdd-54b0-40e3-9ace-d35f70034ecd"
         },
         {
             "active": true,
             "name": "Camera Rig",
             "transform": {
                 "children": [
-                    "1d2005dd-c21b-42f9-a486-47a52c1af74f"
+                    "24afaf6d-5912-4e37-893f-8b3430cf061c"
                 ],
                 "parent": null,
                 "position": [
@@ -384,7 +384,7 @@
                     1
                 ]
             },
-            "uuid": "426ef0a8-83b7-44bb-b66e-bd8c1fd1cb32"
+            "uuid": "dead4867-881c-478f-b54b-1be5dc5e5e4c"
         },
         {
             "active": true,
@@ -392,8 +392,8 @@
                 "castShadows": false,
                 "materials": [],
                 "mesh": {
-                    "id": null,
-                    "type": "none"
+                    "id": "00000000-0000-4000-8000-000000000004",
+                    "type": "mesh"
                 },
                 "receiveShadows": true,
                 "visible": true
@@ -401,7 +401,7 @@
             "name": "Rig Child",
             "transform": {
                 "children": [],
-                "parent": "426ef0a8-83b7-44bb-b66e-bd8c1fd1cb32",
+                "parent": "dead4867-881c-478f-b54b-1be5dc5e5e4c",
                 "position": [
                     2.718923330307007,
                     2,
@@ -419,7 +419,7 @@
                     1
                 ]
             },
-            "uuid": "1d2005dd-c21b-42f9-a486-47a52c1af74f"
+            "uuid": "24afaf6d-5912-4e37-893f-8b3430cf061c"
         },
         {
             "active": true,
@@ -457,7 +457,7 @@
                     1
                 ]
             },
-            "uuid": "2a4ccbfb-136b-4ead-9e17-626741d39cab"
+            "uuid": "873d9c11-70ea-49a4-91d8-bf599f0ee5fc"
         },
         {
             "active": true,
@@ -481,8 +481,8 @@
                 "castShadows": false,
                 "materials": [],
                 "mesh": {
-                    "id": null,
-                    "type": "none"
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "type": "mesh"
                 },
                 "receiveShadows": true,
                 "visible": true
@@ -517,7 +517,7 @@
                     1
                 ]
             },
-            "uuid": "9a676776-8543-4d64-b461-13177168ecea"
+            "uuid": "3d27209e-6d35-46f0-b331-1bcd6a8611d0"
         }
     ],
     "scene": {
@@ -542,7 +542,7 @@
             "ssaoRadius": 0.6000000238418579
         },
         "name": "Feature Test",
-        "uuid": "d7d47501-dd1e-4254-9176-3511ae8fbb26"
+        "uuid": "34a80208-2ac3-49ba-ba45-6424bb2615c3"
     },
     "version": 1
 }

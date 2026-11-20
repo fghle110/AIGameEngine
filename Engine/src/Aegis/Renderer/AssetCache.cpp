@@ -313,6 +313,12 @@ namespace aegis
 		}
 	}
 
+	Uuid AssetCache::GetBuiltinMeshUuid(PrimitiveType type)
+	{
+		const usize index = static_cast<usize>(type);
+		return index < 4 ? Uuid::FromString(c_BuiltinPrimitiveIds[index]) : Uuid::Null();
+	}
+
 	AssetHandle AssetCache::GetBuiltinMesh(PrimitiveType type) const
 	{
 		const usize index = static_cast<usize>(type);

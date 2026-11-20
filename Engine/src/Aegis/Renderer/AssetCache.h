@@ -61,6 +61,9 @@ namespace aegis
 		// SceneRenderer::Initialize so the editor and tests always have geometry.
 		void RegisterBuiltinPrimitives();
 		AssetHandle GetBuiltinMesh(PrimitiveType type) const;
+		// Stable UUID of a built-in primitive, so a serialised scene can reference
+		// "cube"/"plane"/"sphere"/"cylinder" without shipping mesh files.
+		[[nodiscard]] static Uuid GetBuiltinMeshUuid(PrimitiveType type);
 
 		const CachedMesh* GetMesh(const Uuid& meshId) const;
 		const Material* GetMaterial(const Uuid& materialId) const;
