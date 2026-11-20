@@ -31,3 +31,7 @@ tools/local/
 *.ilk
 *.exp
 *.lib
+# Runtime artifacts created when tests/apps are launched from the repo root
+TestAssets/
+logs/
+Export/
